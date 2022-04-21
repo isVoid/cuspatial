@@ -54,7 +54,10 @@ extensions = [
             np.get_include(),
             cuda_include_dir,
         ],
-        library_dirs=[get_python_lib()],
+        library_dirs=[
+            get_python_lib(),
+            os.path.join(CUSPATIAL_ROOT, "_deps/cudf-build"),
+        ],
         libraries=["cudf", "cuspatial"],
         language="c++",
         extra_compile_args=["-std=c++17"],
