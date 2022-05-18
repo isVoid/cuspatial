@@ -1,10 +1,13 @@
 # Copyright (c) 2019-2020, NVIDIA CORPORATION.
 
-from cudf import DataFrame
+from cudf import DataFrame, Series
 from cudf.core.column import as_column
 
 from cuspatial._lib.hausdorff import (
     directed_hausdorff_distance as cpp_directed_hausdorff_distance,
+)
+from cuspatial._lib.linestring_distance import (
+    pairwise_linestring_distance as cpp_pairwise_linestring_distance,
 )
 from cuspatial._lib.point_in_polygon import (
     point_in_polygon as cpp_point_in_polygon,
@@ -334,4 +337,41 @@ def polyline_bounding_boxes(poly_offsets, xs, ys, expansion_radius):
     xs, ys = normalize_point_columns(as_column(xs), as_column(ys))
     return DataFrame._from_data(
         *cpp_polyline_bounding_boxes(poly_offsets, xs, ys, expansion_radius)
+    )
+
+
+def pairwise_linestring_distance(xs1, ys1, offsets1, xs2, ys2, offsets2):
+    """Compute the distances of pairs of linestrings from two arrays.
+
+    Parameters
+    ----------
+    xs1
+        First linestrings point x-coordinates
+    ys1
+        First linestrings point y-coordinates
+    offsets1
+        Begin indices of the first point in the first linestrings
+    xs2
+        Second linestrings point x-coordinates
+    ys2
+        Second linestrings point y-coordinates
+    offsets2
+        Begin indices of the first point in the second linestrings
+
+    Returns
+    -------
+    distance : cudf.Series
+        the distance between each pair of linestrings
+    """
+    xs1, ys1, xs2, ys2 = normalize_point_columns(
+        as_column(xs1), as_column(ys1), as_column(xs2), as_column(ys2)
+    )
+    offsets1 = as_column(offsets1, dtype="int32")
+    offsets2 = as_column(offsets2, dtype="int32")
+    return Series._from_data(
+        {
+            None: cpp_pairwise_linestring_distance(
+                offsets1, xs1, ys1, offsets2, xs2, ys2
+            )
+        }
     )
