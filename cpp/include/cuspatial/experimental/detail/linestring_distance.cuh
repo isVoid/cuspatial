@@ -17,7 +17,6 @@
 #pragma once
 
 #include <cuspatial/error.hpp>
-#include <cuspatial/utility/device_atomics.cuh>
 #include <cuspatial/utility/vec_2d.hpp>
 
 #include <rmm/cuda_stream_view.hpp>
@@ -26,6 +25,8 @@
 #include <thrust/binary_search.h>
 #include <thrust/iterator/counting_iterator.h>
 #include <thrust/iterator/transform_iterator.h>
+
+#include <cuda/atomic>
 
 #include <iterator>
 #include <limits>
@@ -222,18 +223,13 @@ void __global__ pairwise_linestring_distance_kernel(OffsetIterator linestring1_o
     min_squared_distance = std::min(min_squared_distance, squared_segment_distance(A, B, C, D));
   }
 
-  atomicMin(&thrust::raw_reference_cast(*(distances + linestring_idx)),
-            static_cast<T>(std::sqrt(min_squared_distance)));
+  cuda::atomic_ref<T, cuda::thread_scope_device> ref{thrust::raw_reference_cast(*(distances + linestring_idx))};
+  ref.fetch_min(static_cast<T>(std::sqrt(min_squared_distance)), cuda::memory_order_relaxed);
 }
 
 }  // namespace detail
 
-template <class Cart2dItA,
-          class Cart2dItB,
-          class OffsetIterator,
-          class OutputIt,
-          class Cart2dA,
-          class Cart2dB>
+template <class Cart2dItA, class Cart2dItB, class OffsetIterator, class OutputIt>
 void pairwise_linestring_distance(OffsetIterator linestring1_offsets_first,
                                   OffsetIterator linestring1_offsets_last,
                                   Cart2dItA linestring1_points_first,
@@ -244,19 +240,22 @@ void pairwise_linestring_distance(OffsetIterator linestring1_offsets_first,
                                   OutputIt distances_first,
                                   rmm::cuda_stream_view stream)
 {
-  using T = typename Cart2dA::value_type;
+  using T = typename std::iterator_traits<Cart2dItA>::value_type::value_type;
 
-  static_assert(detail::is_floating_point<T,
-                                          typename Cart2dB::value_type,
-                                          typename std::iterator_traits<OutputIt>::value_type>(),
-                "Inputs and output must be floating point types.");
+  static_assert(
+    detail::is_floating_point<T,
+                              typename std::iterator_traits<Cart2dItB>::value_type::value_type,
+                              typename std::iterator_traits<OutputIt>::value_type>(),
+    "Inputs and output must be floating point types.");
 
   static_assert(detail::is_same<T,
-                                typename Cart2dB::value_type,
+                                typename std::iterator_traits<Cart2dItB>::value_type::value_type,
                                 typename std::iterator_traits<OutputIt>::value_type>(),
                 "Inputs and output must be the same types.");
 
-  static_assert(detail::is_same<cartesian_2d<T>, Cart2dA, Cart2dB>(),
+  static_assert(detail::is_same<cartesian_2d<T>,
+                                typename std::iterator_traits<Cart2dItA>::value_type,
+                                typename std::iterator_traits<Cart2dItB>::value_type>(),
                 "Inputs must be cuspatial::cartesian_2d");
 
   auto const num_string_pairs =

@@ -35,22 +35,20 @@ namespace cuspatial {
  * [LegacyRandomAccessIterator][LinkLRAI] and be device-accessible.
  * @tparam OutputIt iterator type for output array. Must meet the requirements of
  * [LegacyRandomAccessIterator][LinkLRAI] and be device-accessible.
- * @tparam std::iterator_traits<Cart2dItA>::value_type value type of `Cart2dItA`, must be
- * `cuspatial::cartesian_2d`
- * @tparam std::iterator_traits<Cart2dItB>::value_type value type of `Cart2dItB`, must be
- * `cuspatial::cartesian_2d`
  *
- * @param linestring1_offsets_first begin of range of the offsets to the first linestring of each
- * pair
+ * @param linestring1_offsets_first beginning of range of the offsets to the first linestring of
+ * each pair
  * @param linestring1_offsets_last end of range of the offsets to the first linestring of each pair
- * @param linestring1_points_first begin of range of the point of the first linestring of each pair
- * @param linestring1_points_last end of range of the point of the first linestring of each pair
- * @param linestring2_offsets_first begin of range of the offsets to the second linestring of each
+ * @param linestring1_points_first beginning of range of the point of the first linestring of each
  * pair
- * @param linestring2_points_first begin of range of the point of the second linestring of each pair
+ * @param linestring1_points_last end of range of the point of the first linestring of each pair
+ * @param linestring2_offsets_first beginning of range of the offsets to the second linestring of
+ * each pair
+ * @param linestring2_points_first beginning of range of the point of the second linestring of each
+ * pair
  * @param linestring2_points_last end of range of the point of the second linestring of each pair
- * @param distances_first begin to output array
- * @param stream Used for device memory operations and kernel launches.
+ * @param distances_first beginning iterator to output
+ * @param stream The CUDA stream to use for device memory operations and kernel launches.
  *
  * @pre all input iterators for coordinates must have `cuspatial::cartesian_2d` type.
  * @pre all scalar types must be floating point types, and must be the same type for all input
@@ -59,12 +57,7 @@ namespace cuspatial {
  * [LinkLRAI]: https://en.cppreference.com/w/cpp/named_req/RandomAccessIterator
  * "LegacyRandomAccessIterator"
  */
-template <class Cart2dItA,
-          class Cart2dItB,
-          class OffsetIterator,
-          class OutputIt,
-          class Cart2dA = typename std::iterator_traits<Cart2dItA>::value_type,
-          class Cart2dB = typename std::iterator_traits<Cart2dItB>::value_type>
+template <class Cart2dItA, class Cart2dItB, class OffsetIterator, class OutputIt>
 void pairwise_linestring_distance(OffsetIterator linestring1_offsets_first,
                                   OffsetIterator linestring1_offsets_last,
                                   Cart2dItA linestring1_points_first,
