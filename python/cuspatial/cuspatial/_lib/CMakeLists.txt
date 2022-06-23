@@ -25,6 +25,7 @@ set(cython_sources
     spatial_join.pyx
     spatial_window.pyx
     trajectory.pyx
+    point_distance.pyx
     )
 set(linked_libraries cuspatial::cuspatial)
 
