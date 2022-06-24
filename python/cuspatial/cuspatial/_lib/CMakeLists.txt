@@ -12,22 +12,37 @@
 # the License.
 # =============================================================================
 
+# Temporary hack to make sure CUDA compiler flags are added
+set(CUSPATIAL_CXX_FLAGS "")
+set(CUSPATIAL_CUDA_FLAGS "")
+set(CUSPATIAL_CXX_DEFINITIONS "")
+set(CUSPATIAL_CUDA_DEFINITIONS "")
+
+include(../../../../cpp/cmake/Modules/ConfigureCUDA.cmake)
+
 set(cython_sources 
-    hausdorff.pyx
-    interpolate.pyx
-    point_in_polygon.pyx
-    polygon_bounding_boxes.pyx
-    polyline_bounding_boxes.pyx
-    linestring_distance.pyx
-    quadtree.pyx
-    shapefile_reader.pyx
-    spatial.pyx
-    spatial_join.pyx
-    spatial_window.pyx
-    trajectory.pyx
+    # hausdorff.pyx
+    # interpolate.pyx
+    # point_in_polygon.pyx
+    # polygon_bounding_boxes.pyx
+    # polyline_bounding_boxes.pyx
+    # linestring_distance.pyx
+    # quadtree.pyx
+    # shapefile_reader.pyx
+    # spatial.pyx
+    # spatial_join.pyx
+    # spatial_window.pyx
+    # trajectory.pyx
     point_distance.pyx
     )
 set(linked_libraries cuspatial::cuspatial)
 
 rapids_cython_create_modules(SOURCE_FILES "${cython_sources}" LINKED_LIBRARIES "${linked_libraries}"
                                                                                CXX)
+
+foreach(cython_module IN LISTS _RAPIDS_CYTHON_CREATED_TARGETS)
+    target_compile_options(${cython_module}
+                PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:${CUSPATIAL_CXX_FLAGS}>"
+                        "$<$<COMPILE_LANGUAGE:CUDA>:${CUSPATIAL_CUDA_FLAGS}>"
+    )
+endforeach()

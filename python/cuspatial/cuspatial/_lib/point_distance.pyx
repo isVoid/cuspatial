@@ -16,12 +16,12 @@ def pairwise_point_distance(
     # Only prototyping for float32 type, double can be implemented with if-else
     output = cp.zeros(shape=(len(points1_x), ), dtype=cp.float32)
 
-    cdef float* points1_x_begin = <float*> <uintptr_t> points1_x.__cuda_array_interface__.data[0]
-    cdef float* points1_y_begin = <float*> <uintptr_t> points1_y.__cuda_array_interface__.data[0]
-    cdef float* points2_x_begin = <float*> <uintptr_t> points2_x.__cuda_array_interface__.data[0]
-    cdef float* points2_y_begin = <float*> <uintptr_t> points2_y.__cuda_array_interface__.data[0]
-    cdef float* output_begin = <float*> <uintptr_t> output.__cuda_array_interface__.data[0]
-    
+    cdef float* points1_x_begin = <float*> <uintptr_t> points1_x.__cuda_array_interface__["data"][0]
+    cdef float* points1_y_begin = <float*> <uintptr_t> points1_y.__cuda_array_interface__["data"][0]
+    cdef float* points2_x_begin = <float*> <uintptr_t> points2_x.__cuda_array_interface__["data"][0]
+    cdef float* points2_y_begin = <float*> <uintptr_t> points2_y.__cuda_array_interface__["data"][0]
+    cdef float* output_begin = <float*> <uintptr_t> output.__cuda_array_interface__["data"][0]
+
     cdef int size = len(points1_x)
 
     cdef ret_type_float points1_begin = make_cartesian_2d_iterator(points1_x_begin, points1_y_begin)
