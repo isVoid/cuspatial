@@ -77,7 +77,7 @@ std::tuple<rmm::device_vector<cartesian_2d<T>>, rmm::device_vector<int32_t>> gen
   std::vector<cartesian_2d<T>> points(num_points);
 
   auto random_walk_func = [segment_length](auto const& prev, auto const& rad) {
-    return cartesian_2d<T>{prev.x + segment_length * rad.x, prev.y + segment_length * rad.y};
+    return prev + rad * segment_length;
   };
 
   thrust::exclusive_scan(
