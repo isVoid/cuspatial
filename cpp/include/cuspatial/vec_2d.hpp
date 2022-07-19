@@ -25,6 +25,12 @@ namespace cuspatial {
  * @{
  */
 
+template <typename T>
+struct cartesian_2d;
+
+template <typename T>
+struct lonlat_2d;
+
 /**
  * @brief A generic 2D vector type.
  *
@@ -39,6 +45,10 @@ struct alignas(2 * sizeof(T)) vec_2d {
   using value_type = T;
   value_type x;
   value_type y;
+
+  operator cartesian_2d<T>() const { return {x, y}; }
+
+  operator lonlat_2d<T>() const { return {x, y}; }
 };
 
 /**
