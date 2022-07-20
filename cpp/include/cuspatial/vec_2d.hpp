@@ -18,13 +18,18 @@
 
 #include <cuspatial/cuda_utils.hpp>
 
-#include <utility>
 namespace cuspatial {
 
 /**
  * @addtogroup types
  * @{
  */
+
+template <typename T>
+struct cartesian_2d;
+
+template <typename T>
+struct lonlat_2d;
 
 /**
  * @brief A generic 2D vector type.
@@ -40,6 +45,10 @@ struct alignas(2 * sizeof(T)) vec_2d {
   using value_type = T;
   value_type x;
   value_type y;
+
+  operator cartesian_2d<T>() const { return {x, y}; }
+
+  operator lonlat_2d<T>() const { return {x, y}; }
 };
 
 /**
@@ -51,19 +60,6 @@ struct alignas(2 * sizeof(T)) vec_2d {
  */
 template <typename T>
 struct alignas(2 * sizeof(T)) lonlat_2d : vec_2d<T> {
-  CUSPATIAL_HOST_DEVICE lonlat_2d<T>() = default;
-  CUSPATIAL_HOST_DEVICE lonlat_2d<T>(T x, T y) : vec_2d<T>{x, y} {}
-  CUSPATIAL_HOST_DEVICE lonlat_2d<T>(const vec_2d<T>& v) : vec_2d<T>(v) {}
-  CUSPATIAL_HOST_DEVICE lonlat_2d<T>(vec_2d<T>&& v) noexcept : vec_2d<T>(std::move(v)) {}
-  lonlat_2d& CUSPATIAL_HOST_DEVICE operator=(vec_2d<T> const& other)
-  {
-    return *this = lonlat_2d<T>(other);
-  }
-  lonlat_2d& CUSPATIAL_HOST_DEVICE operator=(vec_2d<T>&& other) noexcept
-  {
-    return *this = lonlat_2d<T>(std::move(other));
-  }
-  CUSPATIAL_HOST_DEVICE ~lonlat_2d() = default;
 };
 
 /**
@@ -73,19 +69,6 @@ struct alignas(2 * sizeof(T)) lonlat_2d : vec_2d<T> {
  */
 template <typename T>
 struct alignas(2 * sizeof(T)) cartesian_2d : vec_2d<T> {
-  CUSPATIAL_HOST_DEVICE cartesian_2d() = default;
-  CUSPATIAL_HOST_DEVICE cartesian_2d(T x, T y) : vec_2d<T>{x, y} {}
-  CUSPATIAL_HOST_DEVICE cartesian_2d(const vec_2d<T>& v) : vec_2d<T>(v) {}
-  CUSPATIAL_HOST_DEVICE cartesian_2d(vec_2d<T>&& v) noexcept : vec_2d<T>(std::move(v)) {}
-  cartesian_2d& CUSPATIAL_HOST_DEVICE operator=(const vec_2d<T>& other)
-  {
-    return *this = cartesian_2d<T>(other);
-  }
-  cartesian_2d& CUSPATIAL_HOST_DEVICE operator=(vec_2d<T>&& other) noexcept
-  {
-    return *this = cartesian_2d<T>(std::move(other));
-  }
-  CUSPATIAL_HOST_DEVICE ~cartesian_2d() = default;
 };
 
 /**
