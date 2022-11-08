@@ -19,6 +19,8 @@
 #include <cuspatial/traits.hpp>
 #include <cuspatial/vec_2d.hpp>
 
+#include <cuspatial_test/test_util.cuh>
+
 #include <rmm/device_uvector.hpp>
 #include <rmm/device_vector.hpp>
 
@@ -27,6 +29,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <limits>
 #include <type_traits>
 
 namespace cuspatial {
@@ -57,7 +60,7 @@ auto floating_eq_by_abs_error(T val, T abs_error)
   if constexpr (std::is_same_v<T, float>) {
     return ::testing::FloatNear(val, abs_error);
   } else {
-    return ::testing::FloatNear(val, abs_error);
+    return ::testing::DoubleNear(val, abs_error);
   }
 }
 
@@ -99,7 +102,8 @@ MATCHER(float_matcher, std::string(negation ? "are not" : "are") + " approximate
 
   if (::testing::Matches(floating_eq_by_ulp(rhs))(lhs)) return true;
 
-  *result_listener << std::setprecision(18) << lhs << " != " << rhs;
+  *result_listener << std::setprecision(std::numeric_limits<decltype(lhs)>::max_digits10) << lhs
+                   << " != " << rhs;
 
   return false;
 }
@@ -113,7 +117,8 @@ MATCHER_P(float_near_matcher,
 
   if (::testing::Matches(floating_eq_by_abs_error(rhs, abs_error))(lhs)) return true;
 
-  *result_listener << std::setprecision(18) << lhs << " != " << rhs;
+  *result_listener << std::setprecision(std::numeric_limits<decltype(lhs)>::max_digits10) << lhs
+                   << " != " << rhs;
 
   return false;
 }
@@ -162,7 +167,7 @@ inline void expect_vector_equivalent(Vector1 const& lhs, Vector2 const& rhs)
     EXPECT_THAT(to_host<T>(lhs), ::testing::Pointwise(float_matcher(), to_host<T>(rhs)));
   } else if constexpr (std::is_integral_v<T>) {
     EXPECT_THAT(to_host<T>(lhs), ::testing::Pointwise(::testing::Eq(), to_host<T>(rhs)));
-  } else if constexpr (cuspatial::is_optional<T>::value) {
+  } else if constexpr (cuspatial::is_optional<T>) {
     if constexpr (cuspatial::is_vec_2d<typename T::value_type>()) {
       EXPECT_THAT(to_host<T>(lhs),
                   ::testing::Pointwise(optional_matcher(vec_2d_matcher()), to_host<T>(rhs)));
@@ -192,7 +197,7 @@ inline void expect_vector_equivalent(Vector1 const& lhs, Vector2 const& rhs, T a
   } else if constexpr (std::is_floating_point_v<T>) {
     EXPECT_THAT(to_host<T>(lhs),
                 ::testing::Pointwise(float_near_matcher(abs_error), to_host<T>(rhs)));
-  } else if constexpr (cuspatial::is_optional<T>::value) {
+  } else if constexpr (cuspatial::is_optional<T>) {
     if constexpr (cuspatial::is_vec_2d<typename T::value_type>()) {
       EXPECT_THAT(to_host<T>(lhs),
                   ::testing::Pointwise(optional_matcher(vec_2d_matcher()), to_host<T>(rhs)));
@@ -207,10 +212,10 @@ inline void expect_vector_equivalent(Vector1 const& lhs, Vector2 const& rhs, T a
   }
 }
 
-#define CUSPATIAL_EXPECT_VECTORS_EQUIVALENT(lhs, rhs, ...) \
-  do {                                                     \
-    SCOPED_TRACE(" <--  line of failure\n");               \
-    expect_vector_equivalent(lhs, rhs, ##__VA_ARGS__);     \
+#define CUSPATIAL_EXPECT_VECTORS_EQUIVALENT(lhs, rhs, ...)              \
+  do {                                                                  \
+    SCOPED_TRACE(" <--  line of failure\n");                            \
+    cuspatial::test::expect_vector_equivalent(lhs, rhs, ##__VA_ARGS__); \
   } while (0)
 
 }  // namespace test
