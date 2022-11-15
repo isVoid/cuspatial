@@ -23,6 +23,7 @@
 #include <cuspatial/detail/utility/linestring.cuh>
 #include <cuspatial/error.hpp>
 #include <cuspatial/experimental/detail/linestring_intersection_count.cuh>
+#include <cuspatial/traits.hpp>
 
 #include <rmm/cuda_stream_view.hpp>
 #include <rmm/device_uvector.hpp>
@@ -52,14 +53,12 @@ struct intersection_result;
 
 namespace detail {
 
-enum IntersectionTypeCode : uint8_t { MULTIPOINT = 0, MULTILINESTRING = 1 };
-
-template <typename Int>
-void __device__ print(Int i)
-{
-  printf("%d ", static_cast<int>(i));
-}
-
+/**
+ * @brief Compute union column's offset buffer
+ *
+ * This is performing a group-by cummulative sum (pandas semantic) operation
+ * to an "all 1s vector", using `types_buffer` as the key column.
+ */
 rmm::device_uvector<std::size_t> compute_offset_buffer(
   rmm::device_uvector<uint8_t> const& types_buffer,
   rmm::mr::device_memory_resource* mr,
@@ -86,6 +85,19 @@ rmm::device_uvector<std::size_t> compute_offset_buffer(
   return offset_buffer;
 }
 
+/**
+ * @brief Functor to compute the union column's type buffer
+ *
+ * Given the row index and GeometryColumnOffset, each thread determines the pair-id
+ * using binary search. Based on the number of intersecting points and segments of
+ * that pair, the thread can determine the type of geometry of the current row.
+ *
+ * If current pair results in no point and segments, the thread should not write to types buffer.
+ * If current pair results in either point or segments, the thread should write type code `0`/`1`.
+ * If current pair results in both point and segments, the types buffer should take up two slots,
+ * one for `0` and one for `1`. Here we dictates that the preceding thread in the pair should write
+ * `0` and the other thread should write `1`.
+ */
 template <typename OffsetIterator, typename CountIteratorA, typename CountIteratorB>
 struct types_buffer_functor {
   OffsetIterator _geometry_offset_begin;
@@ -111,14 +123,6 @@ struct types_buffer_functor {
       thrust::upper_bound(thrust::seq, _geometry_offset_begin, _geometry_offset_end, idx));
     auto geometry_idx = thrust::distance(_geometry_offset_begin, geometry_iter);
 
-    if (idx == 3) {
-      print(idx);
-      print(geometry_idx);
-      print(_point_count_begin[geometry_idx]);
-      print(_segment_count_begin[geometry_idx]);
-      printf("\n");
-    }
-
     if (_point_count_begin[geometry_idx] == 0 && _segment_count_begin[geometry_idx] == 0)
       return;
     else if (_point_count_begin[geometry_idx] == 0)
@@ -134,6 +138,28 @@ struct types_buffer_functor {
   }
 };
 
+/**
+ * @brief Kernel to compute the linestring intersections and writes the result to the output buffer
+ *
+ * Use naive algorithm of O(N^2).
+ *
+ * @tparam MultiLinestringRange1
+ * @tparam MultiLinestringRange2
+ * @tparam TempIt1
+ * @tparam TempIt2
+ * @tparam Offsets1
+ * @tparam Offsets2
+ * @tparam OutputIt1
+ * @tparam OutputIt2
+ * @param multilinestrings1
+ * @param multilinestrings2
+ * @param n_points_stored
+ * @param n_segments_stored
+ * @param num_points_offsets_first
+ * @param num_segments_offsets_first
+ * @param points_first
+ * @param segments_first
+ */
 template <typename MultiLinestringRange1,
           typename MultiLinestringRange2,
           typename TempIt1,
@@ -153,7 +179,7 @@ void __global__ pairwise_linestring_intersection_simple(MultiLinestringRange1 mu
 {
   using T          = typename MultiLinestringRange1::element_t;
   using types_t    = uint8_t;
-  using count_type = unsigned int;  // TODO: dynamically infer
+  using count_type = std::size_t;
   for (auto idx = threadIdx.x + blockIdx.x * blockDim.x; idx < multilinestrings1.num_points();
        idx += gridDim.x * blockDim.x) {
     auto const part_idx = multilinestrings1.part_idx_from_point_idx(idx);
@@ -203,7 +229,7 @@ rmm::device_uvector<std::size_t> compute_geometry_offsets(
 }  // namespace detail
 
 /**
- * @brief Compute the number of intersections between multilnestrings.
+ * @brief Compute intersections between multilnestrings.
  */
 template <typename MultiLinestringRange1, typename MultiLinestringRange2, typename T>
 intersection_result<T> pairwise_linestring_intersection_with_duplicate(
@@ -212,14 +238,23 @@ intersection_result<T> pairwise_linestring_intersection_with_duplicate(
   rmm::mr::device_memory_resource* mr,
   rmm::cuda_stream_view stream)
 {
-  // TODO type checks..
-  using types_t = uint8_t;
+  using index_t = typename intersection_result<T>::index_t;
+  using types_t = typename intersection_result<T>::types_t;
+
+  static_assert(is_same_floating_point<T, typename MultiLinestringRange2::element_t>(),
+                "Inputs and output must have the same floating point value type.");
+
+  static_assert(is_same<vec_2d<T>,
+                        typename MultiLinestringRange1::point_t,
+                        typename MultiLinestringRange2::point_t>(),
+                "All input types must be cuspatial::vec_2d with the same value type");
 
   CUSPATIAL_EXPECTS(multilinestrings1.size() == multilinestrings2.size(),
                     "The size input multilinestrings mismatch.");
+
   auto const num_pairs = multilinestrings1.size();
 
-  // Step 1: Compute the upper bound of spaces required to store intersection results.
+  // Compute the upper bound of spaces required to store intersection results.
   rmm::device_uvector<std::size_t> num_points_per_pair(num_pairs, stream);
   rmm::device_uvector<std::size_t> num_segments_per_pair(num_pairs, stream);
 
@@ -233,17 +268,10 @@ intersection_result<T> pairwise_linestring_intersection_with_duplicate(
                                                              num_segments_per_pair.begin(),
                                                              stream);
 
-  cuspatial::test::print_device_vector(num_points_per_pair);
-  cuspatial::test::print_device_vector(num_segments_per_pair);
-
-  std::cout << "Step2a: compute geometry offsets" << std::endl;
-
   // Compute geometry offsets for the points and the segments
   auto points_geometry_offsets = detail::compute_geometry_offsets(num_points_per_pair, mr, stream);
   auto segments_geometry_offsets =
     detail::compute_geometry_offsets(num_segments_per_pair, mr, stream);
-
-  std::cout << "Step2c: allocate points and segments" << std::endl;
 
   // Allocate the space needed to store the result point and segments.
   auto num_points = thrust::reduce(
@@ -253,9 +281,6 @@ intersection_result<T> pairwise_linestring_intersection_with_duplicate(
 
   rmm::device_uvector<vec_2d<T>> points(num_points, stream, mr);
   rmm::device_uvector<segment<T>> segments(num_segments, stream, mr);
-
-  std::cout << "Step2d: compute offsets from which the thread should start writing results."
-            << std::endl;
 
   // Compute the offset from which the thread should start writing results
   rmm::device_uvector<std::size_t> num_points_offsets(num_points_per_pair, stream);
@@ -270,10 +295,7 @@ intersection_result<T> pairwise_linestring_intersection_with_duplicate(
                          num_segments_offsets.end(),
                          num_segments_offsets.begin());
 
-  std::cout << "Step2e: allocate temporary buffer where thread should start writing results to."
-            << std::endl;
-
-  // Allocate a temporary vector such that each thead can keep track of how many results
+  // Allocate a temporary vector so that each thread can keep track of how many results
   // of the current multilinestring pair has written.
   rmm::device_uvector<std::size_t> num_geometries_stored_temp(num_pairs, stream);
   rmm::device_uvector<std::size_t> num_points_stored_temp(num_pairs, stream);
@@ -285,8 +307,6 @@ intersection_result<T> pairwise_linestring_intersection_with_duplicate(
     rmm::exec_policy(stream), num_points_stored_temp.begin(), num_pairs, 0);
   thrust::uninitialized_fill_n(
     rmm::exec_policy(stream), num_segments_stored_temp.begin(), num_pairs, 0);
-
-  std::cout << "Step2f: geometry collection offsets." << std::endl;
 
   // Compute GeometryCollectionOffset
   rmm::device_uvector<std::size_t> geometry_collection_offset(num_pairs + 1, stream, mr);
@@ -312,8 +332,6 @@ intersection_result<T> pairwise_linestring_intersection_with_duplicate(
                          geometry_collection_offset.begin());
 
   // Compute types_buffer and offsets_buffer
-  std::cout << "Step2b: compute types and offsets buffer" << std::endl;
-
   auto num_union_column_rows =
     points_geometry_offsets.size() + segments_geometry_offsets.size() - 2;
 
@@ -329,13 +347,8 @@ intersection_result<T> pairwise_linestring_intersection_with_duplicate(
 
   auto offsets_buffer = detail::compute_offset_buffer(types_buffer, mr, stream);
 
-  std::cout << "Step2g: invoke geometry computation kernel." << std::endl;
-
-  // Step 2: Compute the intersections
+  // Compute the intersections
   auto [threads_per_block, num_blocks] = grid_1d(multilinestrings1.num_points());
-
-  cuspatial::test::print_device_vector(num_points_offsets);
-  cuspatial::test::print_device_vector(num_segments_offsets);
 
   detail::
     pairwise_linestring_intersection_simple<<<num_blocks, threads_per_block, 0, stream.value()>>>(

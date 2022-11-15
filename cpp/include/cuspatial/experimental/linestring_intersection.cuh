@@ -27,6 +27,8 @@
 
 namespace cuspatial {
 
+enum IntersectionTypeCode : uint8_t { MULTIPOINT = 0, MULTILINESTRING = 1 };
+
 template <typename T>
 struct intersection_result {
   using point_t   = vec_2d<T>;
