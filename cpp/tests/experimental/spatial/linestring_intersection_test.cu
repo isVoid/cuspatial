@@ -57,7 +57,8 @@ void expect_segment_equivalent(SegmentVector1 expected, SegmentVector2 got)
 }
 
 template <typename T>
-struct LinestringIntersectionTest : public ::testing::Test {};
+struct LinestringIntersectionTest : public ::testing::Test {
+};
 
 // float and double are logically the same but would require seperate tests due to precision.
 using TestTypes = ::testing::Types<float, double>;
@@ -68,8 +69,8 @@ TYPED_TEST(LinestringIntersectionTest, Example)
   using T = TypeParam;
   using P = vec_2d<T>;
 
-  using index_t = typename intersection_result<T>::index_t;
-  using types_t = typename intersection_result<T>::types_t;
+  using index_t = typename intersection_result<T, std::size_t>::index_t;
+  using types_t = typename intersection_result<T, std::size_t>::types_t;
 
   auto multilinestrings1 = make_multilinestring_array({0, 1, 2, 3, 4, 5, 6, 7},
                                                       {0, 2, 4, 6, 8, 10, 12, 14},
@@ -104,12 +105,12 @@ TYPED_TEST(LinestringIntersectionTest, Example)
   auto expected_offset_buffer              = make_device_vector<index_t>({0, 1, 0, 2, 1, 3, 2});
   auto expected_points_geometry_offsets    = make_device_vector<index_t>({0, 1, 3, 5, 7});
   auto expected_points_coords              = make_device_vector<P>({P{0.5, 0.5},
-                                                                    P{0.25, 0.25},
-                                                                    P{0.5, 0.5},
-                                                                    P{0.25, 0.25},
-                                                                    P{0.75, 0.75},
-                                                                    P{0.25, 0.25},
-                                                                    P{0.75, 0.75}});
+                                                       P{0.25, 0.25},
+                                                       P{0.5, 0.5},
+                                                       P{0.25, 0.25},
+                                                       P{0.75, 0.75},
+                                                       P{0.25, 0.25},
+                                                       P{0.75, 0.75}});
   auto expected_segments_geometry_offset   = make_device_vector<index_t>({0, 1, 3, 4});
   auto expected_segments_coords =
     make_device_vector<segment<T>>({segment<T>{P{0.5, 0.5}, P{1, 1}},
@@ -135,8 +136,8 @@ TYPED_TEST(LinestringIntersectionTest, ExampleReversed)
   using T = TypeParam;
   using P = vec_2d<T>;
 
-  using index_t = typename intersection_result<T>::index_t;
-  using types_t = typename intersection_result<T>::types_t;
+  using index_t = typename intersection_result<T, std::size_t>::index_t;
+  using types_t = typename intersection_result<T, std::size_t>::types_t;
 
   auto multilinestrings1 = make_multilinestring_array({0, 1, 2, 3, 4, 5, 6, 7},
                                                       {0, 2, 4, 6, 8, 10, 12, 14},
@@ -171,12 +172,12 @@ TYPED_TEST(LinestringIntersectionTest, ExampleReversed)
   auto expected_offset_buffer              = make_device_vector<index_t>({0, 1, 0, 2, 1, 3, 2});
   auto expected_points_geometry_offsets    = make_device_vector<index_t>({0, 1, 3, 5, 7});
   auto expected_points_coords              = make_device_vector<P>({P{0.5, 0.5},
-                                                                    P{0.25, 0.25},
-                                                                    P{0.5, 0.5},
-                                                                    P{0.25, 0.25},
-                                                                    P{0.75, 0.75},
-                                                                    P{0.25, 0.25},
-                                                                    P{0.75, 0.75}});
+                                                       P{0.25, 0.25},
+                                                       P{0.5, 0.5},
+                                                       P{0.25, 0.25},
+                                                       P{0.75, 0.75},
+                                                       P{0.25, 0.25},
+                                                       P{0.75, 0.75}});
   auto expected_segments_geometry_offset   = make_device_vector<index_t>({0, 1, 3, 4});
   auto expected_segments_coords =
     make_device_vector<segment<T>>({segment<T>{P{0.5, 0.5}, P{1, 1}},

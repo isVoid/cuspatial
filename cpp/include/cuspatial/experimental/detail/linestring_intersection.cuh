@@ -48,7 +48,7 @@
 
 namespace cuspatial {
 
-template <typename T>
+template <typename T, typename OffsetType>
 struct intersection_result;
 
 namespace detail {
@@ -59,18 +59,18 @@ namespace detail {
  * This is performing a group-by cummulative sum (pandas semantic) operation
  * to an "all 1s vector", using `types_buffer` as the key column.
  */
-rmm::device_uvector<std::size_t> compute_offset_buffer(
-  rmm::device_uvector<uint8_t> const& types_buffer,
-  rmm::mr::device_memory_resource* mr,
-  rmm::cuda_stream_view stream)
+template <typename index_t>
+rmm::device_uvector<index_t> compute_offset_buffer(rmm::device_uvector<uint8_t> const& types_buffer,
+                                                   rmm::mr::device_memory_resource* mr,
+                                                   rmm::cuda_stream_view stream)
 {
   auto N            = types_buffer.size();
   auto keys_copy    = rmm::device_uvector(types_buffer, stream);
-  auto indices_temp = rmm::device_uvector<std::size_t>(N, stream);
+  auto indices_temp = rmm::device_uvector<index_t>(N, stream);
   thrust::sequence(rmm::exec_policy(stream), indices_temp.begin(), indices_temp.end());
   thrust::stable_sort_by_key(
     rmm::exec_policy(stream), keys_copy.begin(), keys_copy.end(), indices_temp.begin());
-  auto offset_buffer = rmm::device_uvector<std::size_t>(N, stream, mr);
+  auto offset_buffer = rmm::device_uvector<index_t>(N, stream, mr);
   thrust::uninitialized_fill_n(rmm::exec_policy(stream), offset_buffer.begin(), N, 1);
   thrust::exclusive_scan_by_key(rmm::exec_policy(stream),
                                 keys_copy.begin(),
@@ -117,7 +117,8 @@ struct types_buffer_functor {
   {
   }
 
-  uint8_t __device__ operator()(std::size_t idx)
+  template <typename index_t>
+  uint8_t __device__ operator()(index_t idx)
   {
     auto geometry_iter = thrust::prev(
       thrust::upper_bound(thrust::seq, _geometry_offset_begin, _geometry_offset_end, idx));
@@ -177,24 +178,24 @@ void __global__ pairwise_linestring_intersection_simple(MultiLinestringRange1 mu
                                                         OutputIt1 points_first,
                                                         OutputIt2 segments_first)
 {
-  using T          = typename MultiLinestringRange1::element_t;
-  using types_t    = uint8_t;
-  using count_type = std::size_t;
+  using T       = typename MultiLinestringRange1::element_t;
+  using types_t = uint8_t;
+  using count_t = iterator_value_type<Offsets1>;
   for (auto idx = threadIdx.x + blockIdx.x * blockDim.x; idx < multilinestrings1.num_points();
        idx += gridDim.x * blockDim.x) {
     auto const part_idx = multilinestrings1.part_idx_from_point_idx(idx);
     if (!multilinestrings1.is_valid_segment_id(idx, part_idx)) continue;
-    int32_t const geometry_idx = multilinestrings1.geometry_idx_from_part_idx(part_idx);
-    auto [a, b]                = multilinestrings1.segment(idx);
+    auto const geometry_idx = multilinestrings1.geometry_idx_from_part_idx(part_idx);
+    auto [a, b]             = multilinestrings1.segment(idx);
     for (auto const& linestring2 : multilinestrings2[geometry_idx]) {
       for (auto [c, d] : linestring2) {
         auto [point_opt, segment_opt] = segment_intersection(segment<T>{a, b}, segment<T>{c, d});
         if (point_opt.has_value()) {
-          auto r              = cuda::atomic_ref<std::size_t>{*(n_points_stored + geometry_idx)};
+          auto r              = cuda::atomic_ref<count_t>{*(n_points_stored + geometry_idx)};
           auto next_point_idx = r.fetch_add(1);
           points_first[num_points_offsets_first[geometry_idx] + next_point_idx] = point_opt.value();
         } else if (segment_opt.has_value()) {
-          auto r = cuda::atomic_ref<std::size_t>{*(n_segments_stored + geometry_idx)};
+          auto r                = cuda::atomic_ref<count_t>{*(n_segments_stored + geometry_idx)};
           auto next_segment_idx = r.fetch_add(1);
           segments_first[num_segments_offsets_first[geometry_idx] + next_segment_idx] =
             segment_opt.value();
@@ -208,18 +209,19 @@ void __global__ pairwise_linestring_intersection_simple(MultiLinestringRange1 mu
  * @brief Compute the geometry offset from the number of intersections/overlaps per pair, applicable
  * to both intersecting points and overlapping segments.
  */
-rmm::device_uvector<std::size_t> compute_geometry_offsets(
-  rmm::device_uvector<std::size_t> const& num_intersections_per_pair,
+template <typename index_t>
+rmm::device_uvector<index_t> compute_geometry_offsets(
+  rmm::device_uvector<index_t> const& num_intersections_per_pair,
   rmm::mr::device_memory_resource* mr,
   rmm::cuda_stream_view stream)
 {
-  rmm::device_uvector<std::size_t> offsets_temp(num_intersections_per_pair, stream);
-  auto offset_end  = thrust::remove_if(rmm::exec_policy(stream),
+  rmm::device_uvector<index_t> offsets_temp(num_intersections_per_pair, stream);
+  auto offset_end = thrust::remove_if(rmm::exec_policy(stream),
                                       offsets_temp.begin(),
                                       offsets_temp.end(),
-                                      [] __device__(std::size_t const& i) { return i == 0; });
-  std::size_t size = thrust::distance(offsets_temp.begin(), offset_end);
-  rmm::device_uvector<std::size_t> offsets(size + 1, stream, mr);
+                                      [] __device__(index_t const& i) { return i == 0; });
+  index_t size    = thrust::distance(offsets_temp.begin(), offset_end);
+  rmm::device_uvector<index_t> offsets(size + 1, stream, mr);
   thrust::uninitialized_fill_n(rmm::exec_policy(stream), offsets.begin(), size + 1, 0);
   thrust::inclusive_scan(
     rmm::exec_policy(stream), offsets_temp.begin(), offset_end, thrust::next(offsets.begin()));
@@ -231,15 +233,17 @@ rmm::device_uvector<std::size_t> compute_geometry_offsets(
 /**
  * @brief Compute intersections between multilnestrings.
  */
-template <typename MultiLinestringRange1, typename MultiLinestringRange2, typename T>
-intersection_result<T> pairwise_linestring_intersection_with_duplicate(
+template <typename MultiLinestringRange1,
+          typename MultiLinestringRange2,
+          typename index_t,
+          typename T>
+intersection_result<T, index_t> pairwise_linestring_intersection_with_duplicate(
   MultiLinestringRange1 multilinestrings1,
   MultiLinestringRange2 multilinestrings2,
   rmm::mr::device_memory_resource* mr,
   rmm::cuda_stream_view stream)
 {
-  using index_t = typename intersection_result<T>::index_t;
-  using types_t = typename intersection_result<T>::types_t;
+  using types_t = typename intersection_result<T, index_t>::types_t;
 
   static_assert(is_same_floating_point<T, typename MultiLinestringRange2::element_t>(),
                 "Inputs and output must have the same floating point value type.");
@@ -255,8 +259,8 @@ intersection_result<T> pairwise_linestring_intersection_with_duplicate(
   auto const num_pairs = multilinestrings1.size();
 
   // Compute the upper bound of spaces required to store intersection results.
-  rmm::device_uvector<std::size_t> num_points_per_pair(num_pairs, stream);
-  rmm::device_uvector<std::size_t> num_segments_per_pair(num_pairs, stream);
+  rmm::device_uvector<index_t> num_points_per_pair(num_pairs, stream);
+  rmm::device_uvector<index_t> num_segments_per_pair(num_pairs, stream);
 
   thrust::uninitialized_fill_n(rmm::exec_policy(stream), num_points_per_pair.begin(), num_pairs, 0);
   thrust::uninitialized_fill_n(
@@ -283,8 +287,8 @@ intersection_result<T> pairwise_linestring_intersection_with_duplicate(
   rmm::device_uvector<segment<T>> segments(num_segments, stream, mr);
 
   // Compute the offset from which the thread should start writing results
-  rmm::device_uvector<std::size_t> num_points_offsets(num_points_per_pair, stream);
-  rmm::device_uvector<std::size_t> num_segments_offsets(num_segments_per_pair, stream);
+  rmm::device_uvector<index_t> num_points_offsets(num_points_per_pair, stream);
+  rmm::device_uvector<index_t> num_segments_offsets(num_segments_per_pair, stream);
 
   thrust::exclusive_scan(rmm::exec_policy(stream),
                          num_points_offsets.begin(),
@@ -297,9 +301,9 @@ intersection_result<T> pairwise_linestring_intersection_with_duplicate(
 
   // Allocate a temporary vector so that each thread can keep track of how many results
   // of the current multilinestring pair has written.
-  rmm::device_uvector<std::size_t> num_geometries_stored_temp(num_pairs, stream);
-  rmm::device_uvector<std::size_t> num_points_stored_temp(num_pairs, stream);
-  rmm::device_uvector<std::size_t> num_segments_stored_temp(num_pairs, stream);
+  rmm::device_uvector<index_t> num_geometries_stored_temp(num_pairs, stream);
+  rmm::device_uvector<index_t> num_points_stored_temp(num_pairs, stream);
+  rmm::device_uvector<index_t> num_segments_stored_temp(num_pairs, stream);
 
   thrust::uninitialized_fill_n(
     rmm::exec_policy(stream), num_geometries_stored_temp.begin(), num_pairs, 0);
@@ -309,7 +313,7 @@ intersection_result<T> pairwise_linestring_intersection_with_duplicate(
     rmm::exec_policy(stream), num_segments_stored_temp.begin(), num_pairs, 0);
 
   // Compute GeometryCollectionOffset
-  rmm::device_uvector<std::size_t> geometry_collection_offset(num_pairs + 1, stream, mr);
+  rmm::device_uvector<index_t> geometry_collection_offset(num_pairs + 1, stream, mr);
   thrust::uninitialized_fill_n(
     rmm::exec_policy(stream), geometry_collection_offset.begin(), num_pairs + 1, 0);
   auto num_points_segment_per_pair_it =
@@ -321,7 +325,7 @@ intersection_result<T> pairwise_linestring_intersection_with_duplicate(
                     num_points_segment_per_pair_it + num_pairs,
                     geometry_collection_output_it,
                     [] __device__(auto p) {
-                      std::size_t num_points, num_segments;
+                      index_t num_points, num_segments;
                       thrust::tie(num_points, num_segments) = p;
                       return int(num_points > 0) + int(num_segments > 0);
                     });
@@ -345,7 +349,7 @@ intersection_result<T> pairwise_linestring_intersection_with_duplicate(
                                                 num_points_per_pair.begin(),
                                                 num_segments_per_pair.begin()});
 
-  auto offsets_buffer = detail::compute_offset_buffer(types_buffer, mr, stream);
+  auto offsets_buffer = detail::compute_offset_buffer<index_t>(types_buffer, mr, stream);
 
   // Compute the intersections
   auto [threads_per_block, num_blocks] = grid_1d(multilinestrings1.num_points());
@@ -361,18 +365,18 @@ intersection_result<T> pairwise_linestring_intersection_with_duplicate(
       points.begin(),
       segments.begin());
 
-  auto dummy = rmm::device_uvector<std::size_t>(0, stream, mr);
-  return intersection_result<T>{std::move(geometry_collection_offset),
-                                std::move(types_buffer),
-                                std::move(offsets_buffer),
-                                std::move(points_geometry_offsets),
-                                std::move(points),
-                                std::move(segments_geometry_offsets),
-                                std::move(segments),
-                                std::move(dummy),
-                                std::move(dummy),
-                                std::move(dummy),
-                                std::move(dummy)};
+  auto dummy = rmm::device_uvector<index_t>(0, stream, mr);
+  return intersection_result<T, index_t>{std::move(geometry_collection_offset),
+                                         std::move(types_buffer),
+                                         std::move(offsets_buffer),
+                                         std::move(points_geometry_offsets),
+                                         std::move(points),
+                                         std::move(segments_geometry_offsets),
+                                         std::move(segments),
+                                         std::move(dummy),
+                                         std::move(dummy),
+                                         std::move(dummy),
+                                         std::move(dummy)};
 }
 
 }  // namespace cuspatial

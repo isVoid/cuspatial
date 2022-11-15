@@ -29,12 +29,12 @@ namespace cuspatial {
 
 enum IntersectionTypeCode : uint8_t { MULTIPOINT = 0, MULTILINESTRING = 1 };
 
-template <typename T>
+template <typename T, typename OffsetType>
 struct intersection_result {
   using point_t   = vec_2d<T>;
   using segment_t = segment<T>;
-  using index_t   = std::size_t;
   using types_t   = uint8_t;
+  using index_t   = OffsetType;
 
   rmm::device_uvector<index_t> geometry_collection_offset;
 
@@ -62,8 +62,9 @@ struct intersection_result {
  */
 template <typename MultiLinestringRange1,
           typename MultiLinestringRange2,
-          typename T = typename MultiLinestringRange1::element_t>
-intersection_result<T> pairwise_linestring_intersection_with_duplicate(
+          typename index_t = std::size_t,
+          typename T       = typename MultiLinestringRange1::element_t>
+intersection_result<T, index_t> pairwise_linestring_intersection_with_duplicate(
   MultiLinestringRange1 multilinestrings1,
   MultiLinestringRange2 multilinestrings2,
   rmm::mr::device_memory_resource* mr = rmm::mr::get_current_device_resource(),
