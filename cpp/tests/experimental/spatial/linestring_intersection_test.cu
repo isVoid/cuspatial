@@ -57,8 +57,7 @@ void expect_segment_equivalent(SegmentVector1 expected, SegmentVector2 got)
 }
 
 template <typename T>
-struct LinestringIntersectionTest : public ::testing::Test {
-};
+struct LinestringIntersectionTest : public ::testing::Test {};
 
 // float and double are logically the same but would require seperate tests due to precision.
 using TestTypes = ::testing::Types<float, double>;
@@ -100,18 +99,17 @@ TYPED_TEST(LinestringIntersectionTest, Example)
   auto got = pairwise_linestring_intersection_with_duplicate(multilinestrings1.range(),
                                                              multilinestrings2.range());
 
-  auto expected_geometry_collection_offset = make_device_vector<index_t>({0, 1, 2, 3, 5, 7, 7, 7});
-  auto expected_types_buffer               = make_device_vector<types_t>({0, 0, 1, 0, 1, 0, 1});
-  auto expected_offset_buffer              = make_device_vector<index_t>({0, 1, 0, 2, 1, 3, 2});
-  auto expected_points_geometry_offsets    = make_device_vector<index_t>({0, 1, 3, 5, 7});
-  auto expected_points_coords              = make_device_vector<P>({P{0.5, 0.5},
+  auto expected_geometry_collection_offset =
+    make_device_vector<index_t>({0, 1, 3, 4, 8, 11, 11, 11});
+  auto expected_types_buffer  = make_device_vector<types_t>({0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1});
+  auto expected_offset_buffer = make_device_vector<index_t>({0, 1, 2, 0, 3, 4, 1, 2, 5, 6, 3});
+  auto expected_points_coords = make_device_vector<P>({P{0.5, 0.5},
                                                        P{0.25, 0.25},
                                                        P{0.5, 0.5},
                                                        P{0.25, 0.25},
                                                        P{0.75, 0.75},
                                                        P{0.25, 0.25},
                                                        P{0.75, 0.75}});
-  auto expected_segments_geometry_offset   = make_device_vector<index_t>({0, 1, 3, 4});
   auto expected_segments_coords =
     make_device_vector<segment<T>>({segment<T>{P{0.5, 0.5}, P{1, 1}},
                                     segment<T>{P{0, 0}, P{0.25, 0.25}},
@@ -122,15 +120,11 @@ TYPED_TEST(LinestringIntersectionTest, Example)
                                       std::move(got.geometry_collection_offset));
   CUSPATIAL_EXPECT_VECTORS_EQUIVALENT(expected_types_buffer, std::move(got.types_buffer));
   CUSPATIAL_EXPECT_VECTORS_EQUIVALENT(expected_offset_buffer, std::move(got.offset_buffer));
-  CUSPATIAL_EXPECT_VECTORS_EQUIVALENT(expected_points_geometry_offsets,
-                                      std::move(got.points_geometry_offsets));
   CUSPATIAL_EXPECT_VECTORS_EQUIVALENT(expected_points_coords, std::move(got.points_coords));
-  CUSPATIAL_EXPECT_VECTORS_EQUIVALENT(expected_segments_geometry_offset,
-                                      std::move(got.segments_geometry_offset));
   expect_segment_equivalent(expected_segments_coords, std::move(got.segments_coords));
 }
 
-// Same test, but reversed the order of multilinestrings1 and multilinestrings2
+// Same Test Case as above, reversing the order of multilinestrings1 and multilinestrings2
 TYPED_TEST(LinestringIntersectionTest, ExampleReversed)
 {
   using T = TypeParam;
@@ -167,18 +161,17 @@ TYPED_TEST(LinestringIntersectionTest, ExampleReversed)
   auto got = pairwise_linestring_intersection_with_duplicate(multilinestrings2.range(),
                                                              multilinestrings1.range());
 
-  auto expected_geometry_collection_offset = make_device_vector<index_t>({0, 1, 2, 3, 5, 7, 7, 7});
-  auto expected_types_buffer               = make_device_vector<types_t>({0, 0, 1, 0, 1, 0, 1});
-  auto expected_offset_buffer              = make_device_vector<index_t>({0, 1, 0, 2, 1, 3, 2});
-  auto expected_points_geometry_offsets    = make_device_vector<index_t>({0, 1, 3, 5, 7});
-  auto expected_points_coords              = make_device_vector<P>({P{0.5, 0.5},
+  auto expected_geometry_collection_offset =
+    make_device_vector<index_t>({0, 1, 3, 4, 8, 11, 11, 11});
+  auto expected_types_buffer  = make_device_vector<types_t>({0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1});
+  auto expected_offset_buffer = make_device_vector<index_t>({0, 1, 2, 0, 3, 4, 1, 2, 5, 6, 3});
+  auto expected_points_coords = make_device_vector<P>({P{0.5, 0.5},
                                                        P{0.25, 0.25},
                                                        P{0.5, 0.5},
                                                        P{0.25, 0.25},
                                                        P{0.75, 0.75},
                                                        P{0.25, 0.25},
                                                        P{0.75, 0.75}});
-  auto expected_segments_geometry_offset   = make_device_vector<index_t>({0, 1, 3, 4});
   auto expected_segments_coords =
     make_device_vector<segment<T>>({segment<T>{P{0.5, 0.5}, P{1, 1}},
                                     segment<T>{P{0, 0}, P{0.25, 0.25}},
@@ -189,10 +182,6 @@ TYPED_TEST(LinestringIntersectionTest, ExampleReversed)
                                       std::move(got.geometry_collection_offset));
   CUSPATIAL_EXPECT_VECTORS_EQUIVALENT(expected_types_buffer, std::move(got.types_buffer));
   CUSPATIAL_EXPECT_VECTORS_EQUIVALENT(expected_offset_buffer, std::move(got.offset_buffer));
-  CUSPATIAL_EXPECT_VECTORS_EQUIVALENT(expected_points_geometry_offsets,
-                                      std::move(got.points_geometry_offsets));
   CUSPATIAL_EXPECT_VECTORS_EQUIVALENT(expected_points_coords, std::move(got.points_coords));
-  CUSPATIAL_EXPECT_VECTORS_EQUIVALENT(expected_segments_geometry_offset,
-                                      std::move(got.segments_geometry_offset));
   expect_segment_equivalent(expected_segments_coords, std::move(got.segments_coords));
 }

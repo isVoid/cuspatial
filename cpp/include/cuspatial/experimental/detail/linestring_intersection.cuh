@@ -86,60 +86,6 @@ rmm::device_uvector<index_t> compute_offset_buffer(rmm::device_uvector<uint8_t> 
 }
 
 /**
- * @brief Functor to compute the union column's type buffer
- *
- * Given the row index and GeometryColumnOffset, each thread determines the pair-id
- * using binary search. Based on the number of intersecting points and segments of
- * that pair, the thread can determine the type of geometry of the current row.
- *
- * If current pair results in no point and segments, the thread should not write to types buffer.
- * If current pair results in either point or segments, the thread should write type code `0`/`1`.
- * If current pair results in both point and segments, the types buffer should take up two slots,
- * one for `0` and one for `1`. Here we dictates that the preceding thread in the pair should write
- * `0` and the other thread should write `1`.
- */
-template <typename OffsetIterator, typename CountIteratorA, typename CountIteratorB>
-struct types_buffer_functor {
-  OffsetIterator _geometry_offset_begin;
-  OffsetIterator _geometry_offset_end;
-
-  CountIteratorA _point_count_begin;
-  CountIteratorB _segment_count_begin;
-
-  types_buffer_functor(OffsetIterator geometry_offset_begin,
-                       OffsetIterator geometry_offset_end,
-                       CountIteratorA point_count_begin,
-                       CountIteratorB segment_count_begin)
-    : _geometry_offset_begin(geometry_offset_begin),
-      _geometry_offset_end(geometry_offset_end),
-      _point_count_begin(point_count_begin),
-      _segment_count_begin(segment_count_begin)
-  {
-  }
-
-  template <typename index_t>
-  uint8_t __device__ operator()(index_t idx)
-  {
-    auto geometry_iter = thrust::prev(
-      thrust::upper_bound(thrust::seq, _geometry_offset_begin, _geometry_offset_end, idx));
-    auto geometry_idx = thrust::distance(_geometry_offset_begin, geometry_iter);
-
-    if (_point_count_begin[geometry_idx] == 0 && _segment_count_begin[geometry_idx] == 0)
-      return;
-    else if (_point_count_begin[geometry_idx] == 0)
-      return IntersectionTypeCode::MULTILINESTRING;
-    else if (_segment_count_begin[geometry_idx] == 0)
-      return IntersectionTypeCode::MULTIPOINT;
-    else {
-      // This group contains both type of geometries
-      // In each group, we (arbitrarily) enforce that multipoint should precede multilinestring.
-      if (idx == _geometry_offset_begin[geometry_idx]) { return IntersectionTypeCode::MULTIPOINT; }
-      return IntersectionTypeCode::MULTILINESTRING;
-    }
-  }
-};
-
-/**
  * @brief Kernel to compute the linestring intersections and writes the result to the output buffer
  *
  * Use naive algorithm of O(N^2).
@@ -167,6 +113,9 @@ template <typename MultiLinestringRange1,
           typename TempIt2,
           typename Offsets1,
           typename Offsets2,
+          typename Offsets3,
+          typename Offsets4,
+          typename Types1,
           typename OutputIt1,
           typename OutputIt2>
 void __global__ pairwise_linestring_intersection_simple(MultiLinestringRange1 multilinestrings1,
@@ -175,6 +124,9 @@ void __global__ pairwise_linestring_intersection_simple(MultiLinestringRange1 mu
                                                         TempIt2 n_segments_stored,
                                                         Offsets1 num_points_offsets_first,
                                                         Offsets2 num_segments_offsets_first,
+                                                        Offsets3 geometry_collection_offset_first,
+                                                        Offsets4 num_points_per_pair_first,
+                                                        Types1 types_code_first,
                                                         OutputIt1 points_first,
                                                         OutputIt2 segments_first)
 {
@@ -190,42 +142,26 @@ void __global__ pairwise_linestring_intersection_simple(MultiLinestringRange1 mu
     for (auto const& linestring2 : multilinestrings2[geometry_idx]) {
       for (auto [c, d] : linestring2) {
         auto [point_opt, segment_opt] = segment_intersection(segment<T>{a, b}, segment<T>{c, d});
+
         if (point_opt.has_value()) {
           auto r              = cuda::atomic_ref<count_t>{*(n_points_stored + geometry_idx)};
           auto next_point_idx = r.fetch_add(1);
           points_first[num_points_offsets_first[geometry_idx] + next_point_idx] = point_opt.value();
+          types_code_first[geometry_collection_offset_first[geometry_idx] + next_point_idx] =
+            IntersectionTypeCode::POINT;
         } else if (segment_opt.has_value()) {
           auto r                = cuda::atomic_ref<count_t>{*(n_segments_stored + geometry_idx)};
           auto next_segment_idx = r.fetch_add(1);
           segments_first[num_segments_offsets_first[geometry_idx] + next_segment_idx] =
             segment_opt.value();
+
+          types_code_first[geometry_collection_offset_first[geometry_idx] +
+                           num_points_per_pair_first[geometry_idx] + next_segment_idx] =
+            IntersectionTypeCode::LINESTRING;
         }
       }
     }
   }
-}
-
-/**
- * @brief Compute the geometry offset from the number of intersections/overlaps per pair, applicable
- * to both intersecting points and overlapping segments.
- */
-template <typename index_t>
-rmm::device_uvector<index_t> compute_geometry_offsets(
-  rmm::device_uvector<index_t> const& num_intersections_per_pair,
-  rmm::mr::device_memory_resource* mr,
-  rmm::cuda_stream_view stream)
-{
-  rmm::device_uvector<index_t> offsets_temp(num_intersections_per_pair, stream);
-  auto offset_end = thrust::remove_if(rmm::exec_policy(stream),
-                                      offsets_temp.begin(),
-                                      offsets_temp.end(),
-                                      [] __device__(index_t const& i) { return i == 0; });
-  index_t size    = thrust::distance(offsets_temp.begin(), offset_end);
-  rmm::device_uvector<index_t> offsets(size + 1, stream, mr);
-  thrust::uninitialized_fill_n(rmm::exec_policy(stream), offsets.begin(), size + 1, 0);
-  thrust::inclusive_scan(
-    rmm::exec_policy(stream), offsets_temp.begin(), offset_end, thrust::next(offsets.begin()));
-  return offsets;
 }
 
 }  // namespace detail
@@ -272,11 +208,6 @@ intersection_result<T, index_t> pairwise_linestring_intersection_with_duplicate(
                                                              num_segments_per_pair.begin(),
                                                              stream);
 
-  // Compute geometry offsets for the points and the segments
-  auto points_geometry_offsets = detail::compute_geometry_offsets(num_points_per_pair, mr, stream);
-  auto segments_geometry_offsets =
-    detail::compute_geometry_offsets(num_segments_per_pair, mr, stream);
-
   // Allocate the space needed to store the result point and segments.
   auto num_points = thrust::reduce(
     rmm::exec_policy(stream), num_points_per_pair.begin(), num_points_per_pair.end());
@@ -301,12 +232,9 @@ intersection_result<T, index_t> pairwise_linestring_intersection_with_duplicate(
 
   // Allocate a temporary vector so that each thread can keep track of how many results
   // of the current multilinestring pair has written.
-  rmm::device_uvector<index_t> num_geometries_stored_temp(num_pairs, stream);
   rmm::device_uvector<index_t> num_points_stored_temp(num_pairs, stream);
   rmm::device_uvector<index_t> num_segments_stored_temp(num_pairs, stream);
 
-  thrust::uninitialized_fill_n(
-    rmm::exec_policy(stream), num_geometries_stored_temp.begin(), num_pairs, 0);
   thrust::uninitialized_fill_n(
     rmm::exec_policy(stream), num_points_stored_temp.begin(), num_pairs, 0);
   thrust::uninitialized_fill_n(
@@ -327,7 +255,7 @@ intersection_result<T, index_t> pairwise_linestring_intersection_with_duplicate(
                     [] __device__(auto p) {
                       index_t num_points, num_segments;
                       thrust::tie(num_points, num_segments) = p;
-                      return int(num_points > 0) + int(num_segments > 0);
+                      return num_points + num_segments;
                     });
 
   thrust::inclusive_scan(rmm::exec_policy(stream),
@@ -335,21 +263,10 @@ intersection_result<T, index_t> pairwise_linestring_intersection_with_duplicate(
                          geometry_collection_offset.end(),
                          geometry_collection_offset.begin());
 
-  // Compute types_buffer and offsets_buffer
-  auto num_union_column_rows =
-    points_geometry_offsets.size() + segments_geometry_offsets.size() - 2;
+  // Allocate types buffer
+  auto num_union_column_rows = num_points + num_segments;
 
   rmm::device_uvector<uint8_t> types_buffer(num_union_column_rows, stream, mr);
-
-  thrust::tabulate(rmm::exec_policy(stream),
-                   types_buffer.begin(),
-                   types_buffer.end(),
-                   detail::types_buffer_functor{geometry_collection_offset.begin(),
-                                                geometry_collection_offset.end(),
-                                                num_points_per_pair.begin(),
-                                                num_segments_per_pair.begin()});
-
-  auto offsets_buffer = detail::compute_offset_buffer<index_t>(types_buffer, mr, stream);
 
   // Compute the intersections
   auto [threads_per_block, num_blocks] = grid_1d(multilinestrings1.num_points());
@@ -362,17 +279,23 @@ intersection_result<T, index_t> pairwise_linestring_intersection_with_duplicate(
       num_segments_stored_temp.begin(),
       num_points_offsets.begin(),
       num_segments_offsets.begin(),
+      geometry_collection_offset.begin(),
+      num_points_per_pair.begin(),
+      types_buffer.begin(),
       points.begin(),
       segments.begin());
+
+  // Types buffer is computed, computed offsets buffer.
+  auto offsets_buffer = detail::compute_offset_buffer<index_t>(types_buffer, mr, stream);
 
   auto dummy = rmm::device_uvector<index_t>(0, stream, mr);
   return intersection_result<T, index_t>{std::move(geometry_collection_offset),
                                          std::move(types_buffer),
                                          std::move(offsets_buffer),
-                                         std::move(points_geometry_offsets),
                                          std::move(points),
-                                         std::move(segments_geometry_offsets),
                                          std::move(segments),
+                                         std::move(dummy),
+                                         std::move(dummy),
                                          std::move(dummy),
                                          std::move(dummy),
                                          std::move(dummy),

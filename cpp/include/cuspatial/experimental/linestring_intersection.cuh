@@ -27,7 +27,7 @@
 
 namespace cuspatial {
 
-enum IntersectionTypeCode : uint8_t { MULTIPOINT = 0, MULTILINESTRING = 1 };
+enum IntersectionTypeCode : uint8_t { POINT = 0, LINESTRING = 1 };
 
 template <typename T, typename OffsetType>
 struct intersection_result {
@@ -42,16 +42,16 @@ struct intersection_result {
   rmm::device_uvector<index_t> offset_buffer;
 
   // Point Results
-  rmm::device_uvector<index_t> points_geometry_offsets;
   rmm::device_uvector<point_t> points_coords;
 
   // Segment Results
-  rmm::device_uvector<index_t> segments_geometry_offset;
   rmm::device_uvector<segment_t> segments_coords;
 
   // look-back indices
+  rmm::device_uvector<index_t> lhs_id_offsets;
   rmm::device_uvector<index_t> lhs_linestring_id;
   rmm::device_uvector<index_t> lhs_segment_id;
+  rmm::device_uvector<index_t> rhs_id_offsets;
   rmm::device_uvector<index_t> rhs_linestring_id;
   rmm::device_uvector<index_t> rhs_segment_id;
 };
