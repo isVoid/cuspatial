@@ -116,6 +116,7 @@ template <typename MultiLinestringRange1,
           typename Offsets3,
           typename Offsets4,
           typename Types1,
+          typename Offsets5,
           typename OutputIt1,
           typename OutputIt2>
 void __global__ pairwise_linestring_intersection_simple(MultiLinestringRange1 multilinestrings1,
@@ -127,6 +128,10 @@ void __global__ pairwise_linestring_intersection_simple(MultiLinestringRange1 mu
                                                         Offsets3 geometry_collection_offset_first,
                                                         Offsets4 num_points_per_pair_first,
                                                         Types1 types_code_first,
+                                                        Offsets5 lhs_linestring_id_first,
+                                                        Offsets5 lhs_segment_id_first,
+                                                        Offsets5 rhs_linestring_id_first,
+                                                        Offsets5 rhs_segment_id_first,
                                                         OutputIt1 points_first,
                                                         OutputIt2 segments_first)
 {
@@ -137,10 +142,16 @@ void __global__ pairwise_linestring_intersection_simple(MultiLinestringRange1 mu
        idx += gridDim.x * blockDim.x) {
     auto const part_idx = multilinestrings1.part_idx_from_point_idx(idx);
     if (!multilinestrings1.is_valid_segment_id(idx, part_idx)) continue;
-    auto const geometry_idx = multilinestrings1.geometry_idx_from_part_idx(part_idx);
-    auto [a, b]             = multilinestrings1.segment(idx);
-    for (auto const& linestring2 : multilinestrings2[geometry_idx]) {
-      for (auto [c, d] : linestring2) {
+    auto const geometry_idx     = multilinestrings1.geometry_idx_from_part_idx(part_idx);
+    auto [a, b]                 = multilinestrings1.segment(idx);
+    auto const multilinestring2 = multilinestrings2[geometry_idx];
+
+    for (auto rhs_linestring_idx = 0; rhs_linestring_idx < multilinestring2.size();
+         ++rhs_linestring_idx) {
+      auto const linestring2 = multilinestring2[rhs_linestring_idx];
+      for (auto rhs_segment_idx = 0; rhs_segment_idx < linestring2.num_segments();
+           ++rhs_segment_idx) {
+        auto [c, d]                   = linestring2.segment(rhs_segment_idx);
         auto [point_opt, segment_opt] = segment_intersection(segment<T>{a, b}, segment<T>{c, d});
 
         if (point_opt.has_value()) {
@@ -265,11 +276,16 @@ intersection_result<T, index_t> pairwise_linestring_intersection_with_duplicate(
 
   // Allocate types buffer
   auto num_union_column_rows = num_points + num_segments;
-
   rmm::device_uvector<uint8_t> types_buffer(num_union_column_rows, stream, mr);
 
   // Compute the intersections
   auto [threads_per_block, num_blocks] = grid_1d(multilinestrings1.num_points());
+
+  // Allocate buffer for the look-back indices
+  rmm::device_uvector<index_t> lhs_linestring_id(num_union_column_rows, stream, mr);
+  rmm::device_uvector<index_t> lhs_segment_id(num_union_column_rows, stream, mr);
+  rmm::device_uvector<index_t> rhs_linestring_id(num_union_column_rows, stream, mr);
+  rmm::device_uvector<index_t> rhs_segment_id(num_union_column_rows, stream, mr);
 
   detail::
     pairwise_linestring_intersection_simple<<<num_blocks, threads_per_block, 0, stream.value()>>>(
@@ -282,6 +298,10 @@ intersection_result<T, index_t> pairwise_linestring_intersection_with_duplicate(
       geometry_collection_offset.begin(),
       num_points_per_pair.begin(),
       types_buffer.begin(),
+      lhs_linestring_id.begin(),
+      lhs_segment_id.begin(),
+      rhs_linestring_id.begin(),
+      rhs_segment_id.begin(),
       points.begin(),
       segments.begin());
 
@@ -294,8 +314,6 @@ intersection_result<T, index_t> pairwise_linestring_intersection_with_duplicate(
                                          std::move(offsets_buffer),
                                          std::move(points),
                                          std::move(segments),
-                                         std::move(dummy),
-                                         std::move(dummy),
                                          std::move(dummy),
                                          std::move(dummy),
                                          std::move(dummy),
