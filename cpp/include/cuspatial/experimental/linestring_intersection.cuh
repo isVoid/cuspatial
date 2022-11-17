@@ -29,25 +29,36 @@ namespace cuspatial {
 
 enum IntersectionTypeCode : uint8_t { POINT = 0, LINESTRING = 1 };
 
+/**
+ * @brief Result of linestring intersections
+ *
+ * Owning object to the result of linestring intersections.
+ * The results are modeled after arrow type List<Union<Point, LineString>>.
+ *
+ * @tparam T Type of coordinates
+ * @tparam OffsetType Type of offsets
+ */
 template <typename T, typename OffsetType>
-struct intersection_result {
+struct linestring_intersection_result {
   using point_t   = vec_2d<T>;
   using segment_t = segment<T>;
   using types_t   = uint8_t;
   using index_t   = OffsetType;
 
+  /// List offsets to the union column
   rmm::device_uvector<index_t> geometry_collection_offset;
 
+  /// Union Column Results
   rmm::device_uvector<types_t> types_buffer;
   rmm::device_uvector<index_t> offset_buffer;
 
-  // Point Results
+  /// Child 0: Point Results
   rmm::device_uvector<point_t> points_coords;
 
-  // Segment Results
+  /// Child 1: Segment Results
   rmm::device_uvector<segment_t> segments_coords;
 
-  // look-back indices
+  /// Look-back Indices
   rmm::device_uvector<index_t> lhs_linestring_id;
   rmm::device_uvector<index_t> lhs_segment_id;
   rmm::device_uvector<index_t> rhs_linestring_id;
@@ -57,12 +68,22 @@ struct intersection_result {
 /**
  * @brief Compute the intersections between multilinestrings and ids to the intersecting
  * linestrings.
+ *
+ * @tparam MultiLinestringRange1 Multilinestring Range of the first operand
+ * @tparam MultiLinestringRange2 Multilinestring Range of the second operand
+ * @tparam index_t Type of the look-back index in result
+ * @tparam T Type of coordinate
+ * @param multilinestrings1 Range to the first multilinestring in the pair
+ * @param multilinestrings2 Range to the second multilinestring in the pair
+ * @param mr The resource to use to allocate the returned data
+ * @param stream The CUDA stream on which to perform computations
+ * @return Results of intersection with duplicates
  */
 template <typename MultiLinestringRange1,
           typename MultiLinestringRange2,
           typename index_t = std::size_t,
           typename T       = typename MultiLinestringRange1::element_t>
-intersection_result<T, index_t> pairwise_linestring_intersection_with_duplicate(
+linestring_intersection_result<T, index_t> pairwise_linestring_intersection_with_duplicate(
   MultiLinestringRange1 multilinestrings1,
   MultiLinestringRange2 multilinestrings2,
   rmm::mr::device_memory_resource* mr = rmm::mr::get_current_device_resource(),

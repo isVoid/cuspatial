@@ -57,19 +57,21 @@ void expect_segment_equivalent(SegmentVector1 expected, SegmentVector2 got)
 }
 
 template <typename T>
-struct LinestringIntersectionTest : public ::testing::Test {};
+struct LinestringIntersectionDuplicatesTest : public ::testing::Test {
+};
 
 // float and double are logically the same but would require seperate tests due to precision.
 using TestTypes = ::testing::Types<float, double>;
-TYPED_TEST_CASE(LinestringIntersectionTest, TestTypes);
+TYPED_TEST_CASE(LinestringIntersectionDuplicatesTest, TestTypes);
 
-TYPED_TEST(LinestringIntersectionTest, Example)
+// TODO: sort the points in the intersection result since the result order is arbitrary.
+TYPED_TEST(LinestringIntersectionDuplicatesTest, Example)
 {
   using T = TypeParam;
   using P = vec_2d<T>;
 
-  using index_t = typename intersection_result<T, std::size_t>::index_t;
-  using types_t = typename intersection_result<T, std::size_t>::types_t;
+  using index_t = typename linestring_intersection_result<T, std::size_t>::index_t;
+  using types_t = typename linestring_intersection_result<T, std::size_t>::types_t;
 
   auto multilinestrings1 = make_multilinestring_array({0, 1, 2, 3, 4, 5, 6, 7},
                                                       {0, 2, 4, 6, 8, 10, 12, 14},
@@ -137,13 +139,13 @@ TYPED_TEST(LinestringIntersectionTest, Example)
 }
 
 // Same Test Case as above, reversing the order of multilinestrings1 and multilinestrings2
-TYPED_TEST(LinestringIntersectionTest, ExampleReversed)
+TYPED_TEST(LinestringIntersectionDuplicatesTest, ExampleReversed)
 {
   using T = TypeParam;
   using P = vec_2d<T>;
 
-  using index_t = typename intersection_result<T, std::size_t>::index_t;
-  using types_t = typename intersection_result<T, std::size_t>::types_t;
+  using index_t = typename linestring_intersection_result<T, std::size_t>::index_t;
+  using types_t = typename linestring_intersection_result<T, std::size_t>::types_t;
 
   auto multilinestrings1 = make_multilinestring_array({0, 1, 2, 3, 4, 5, 6, 7},
                                                       {0, 2, 4, 6, 8, 10, 12, 14},
@@ -195,6 +197,98 @@ TYPED_TEST(LinestringIntersectionTest, ExampleReversed)
 
   auto expected_lhs_linestring_ids = make_device_vector<index_t>({0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
   auto expected_lhs_segment_ids    = make_device_vector<index_t>({0, 0, 1, 0, 1, 2, 0, 3, 0, 1, 2});
+
+  CUSPATIAL_EXPECT_VECTORS_EQUIVALENT(expected_geometry_collection_offset,
+                                      std::move(got.geometry_collection_offset));
+  CUSPATIAL_EXPECT_VECTORS_EQUIVALENT(expected_types_buffer, std::move(got.types_buffer));
+  CUSPATIAL_EXPECT_VECTORS_EQUIVALENT(expected_offset_buffer, std::move(got.offset_buffer));
+  CUSPATIAL_EXPECT_VECTORS_EQUIVALENT(expected_points_coords, std::move(got.points_coords));
+  expect_segment_equivalent(expected_segments_coords, std::move(got.segments_coords));
+  CUSPATIAL_EXPECT_VECTORS_EQUIVALENT(expected_lhs_linestring_ids,
+                                      std::move(got.lhs_linestring_id));
+  CUSPATIAL_EXPECT_VECTORS_EQUIVALENT(expected_lhs_segment_ids, std::move(got.lhs_segment_id));
+  CUSPATIAL_EXPECT_VECTORS_EQUIVALENT(expected_rhs_linestring_ids,
+                                      std::move(got.rhs_linestring_id));
+  CUSPATIAL_EXPECT_VECTORS_EQUIVALENT(expected_rhs_segment_ids, std::move(got.rhs_segment_id));
+}
+
+TYPED_TEST(LinestringIntersectionDuplicatesTest, MultilinestringsIntersectionWithDuplicates)
+{
+  using T = TypeParam;
+  using P = vec_2d<T>;
+
+  using index_t = typename linestring_intersection_result<T, std::size_t>::index_t;
+  using types_t = typename linestring_intersection_result<T, std::size_t>::types_t;
+
+  auto multilinestrings1 = make_multilinestring_array(
+    {0, 2, 5},
+    {0, 2, 4, 6, 8, 10},
+    {P{0, 0}, P{1, 1}, P{1, 0}, P{2, 1}, P{0, 2}, P{1, 2}, P{0, 3}, P{0, 2}, P{0, 3}, P{1, 2}});
+
+  auto multilinestrings2 =
+    make_multilinestring_array({0, 1, 2}, {0, 2, 4}, {P{0, 1}, P{2, 0}, P{0, 2.5}, P{1, 2.5}});
+
+  auto got = pairwise_linestring_intersection_with_duplicate(multilinestrings1.range(),
+                                                             multilinestrings2.range());
+
+  auto expected_geometry_collection_offset = make_device_vector<index_t>({0, 2, 4});
+  auto expected_types_buffer               = make_device_vector<types_t>({0, 0, 0, 0});
+  auto expected_offset_buffer              = make_device_vector<index_t>({0, 1, 2, 3});
+  auto expected_points_coords =
+    make_device_vector<P>({P{2 / 3., 2 / 3.}, P{4 / 3., 1 / 3.}, P{0, 2.5}, P{0.5, 2.5}});
+
+  auto expected_segments_coords = make_device_vector<segment<T>>({});
+
+  auto expected_lhs_linestring_ids = make_device_vector<index_t>({0, 1, 1, 2});
+  auto expected_lhs_segment_ids    = make_device_vector<index_t>({0, 0, 0, 0});
+  auto expected_rhs_linestring_ids = make_device_vector<index_t>({0, 0, 0, 0});
+  auto expected_rhs_segment_ids    = make_device_vector<index_t>({0, 0, 0, 0});
+
+  CUSPATIAL_EXPECT_VECTORS_EQUIVALENT(expected_geometry_collection_offset,
+                                      std::move(got.geometry_collection_offset));
+  CUSPATIAL_EXPECT_VECTORS_EQUIVALENT(expected_types_buffer, std::move(got.types_buffer));
+  CUSPATIAL_EXPECT_VECTORS_EQUIVALENT(expected_offset_buffer, std::move(got.offset_buffer));
+  CUSPATIAL_EXPECT_VECTORS_EQUIVALENT(expected_points_coords, std::move(got.points_coords));
+  expect_segment_equivalent(expected_segments_coords, std::move(got.segments_coords));
+  CUSPATIAL_EXPECT_VECTORS_EQUIVALENT(expected_lhs_linestring_ids,
+                                      std::move(got.lhs_linestring_id));
+  CUSPATIAL_EXPECT_VECTORS_EQUIVALENT(expected_lhs_segment_ids, std::move(got.lhs_segment_id));
+  CUSPATIAL_EXPECT_VECTORS_EQUIVALENT(expected_rhs_linestring_ids,
+                                      std::move(got.rhs_linestring_id));
+  CUSPATIAL_EXPECT_VECTORS_EQUIVALENT(expected_rhs_segment_ids, std::move(got.rhs_segment_id));
+}
+
+TYPED_TEST(LinestringIntersectionDuplicatesTest, MultilinestringsIntersectionWithDuplicatesReversed)
+{
+  using T = TypeParam;
+  using P = vec_2d<T>;
+
+  using index_t = typename linestring_intersection_result<T, std::size_t>::index_t;
+  using types_t = typename linestring_intersection_result<T, std::size_t>::types_t;
+
+  auto multilinestrings1 = make_multilinestring_array(
+    {0, 2, 5},
+    {0, 2, 4, 6, 8, 10},
+    {P{0, 0}, P{1, 1}, P{1, 0}, P{2, 1}, P{0, 2}, P{1, 2}, P{0, 3}, P{0, 2}, P{0, 3}, P{1, 2}});
+
+  auto multilinestrings2 =
+    make_multilinestring_array({0, 1, 2}, {0, 2, 4}, {P{0, 1}, P{2, 0}, P{0, 2.5}, P{1, 2.5}});
+
+  auto got = pairwise_linestring_intersection_with_duplicate(multilinestrings2.range(),
+                                                             multilinestrings1.range());
+
+  auto expected_geometry_collection_offset = make_device_vector<index_t>({0, 2, 4});
+  auto expected_types_buffer               = make_device_vector<types_t>({0, 0, 0, 0});
+  auto expected_offset_buffer              = make_device_vector<index_t>({0, 1, 2, 3});
+  auto expected_points_coords =
+    make_device_vector<P>({P{2 / 3., 2 / 3.}, P{4 / 3., 1 / 3.}, P{0, 2.5}, P{0.5, 2.5}});
+
+  auto expected_segments_coords = make_device_vector<segment<T>>({});
+
+  auto expected_rhs_linestring_ids = make_device_vector<index_t>({0, 1, 1, 2});
+  auto expected_rhs_segment_ids    = make_device_vector<index_t>({0, 0, 0, 0});
+  auto expected_lhs_linestring_ids = make_device_vector<index_t>({0, 0, 0, 0});
+  auto expected_lhs_segment_ids    = make_device_vector<index_t>({0, 0, 0, 0});
 
   CUSPATIAL_EXPECT_VECTORS_EQUIVALENT(expected_geometry_collection_offset,
                                       std::move(got.geometry_collection_offset));

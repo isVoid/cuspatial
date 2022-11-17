@@ -16,8 +16,6 @@
 
 #pragma once
 
-#include <cuspatial_test/test_util.cuh>
-
 #include <cuspatial/cuda_utils.hpp>
 #include <cuspatial/detail/utility/device_atomics.cuh>
 #include <cuspatial/detail/utility/linestring.cuh>
@@ -49,7 +47,7 @@
 namespace cuspatial {
 
 template <typename T, typename OffsetType>
-struct intersection_result;
+struct linestring_intersection_result;
 
 namespace detail {
 
@@ -86,26 +84,10 @@ rmm::device_uvector<index_t> compute_offset_buffer(rmm::device_uvector<uint8_t> 
 }
 
 /**
- * @brief Kernel to compute the linestring intersections and writes the result to the output buffer
+ * @brief Kernel to compute intersection and store the result and look-back indices to outputs.
  *
- * Use naive algorithm of O(N^2).
- *
- * @tparam MultiLinestringRange1
- * @tparam MultiLinestringRange2
- * @tparam TempIt1
- * @tparam TempIt2
- * @tparam Offsets1
- * @tparam Offsets2
- * @tparam OutputIt1
- * @tparam OutputIt2
- * @param multilinestrings1
- * @param multilinestrings2
- * @param n_points_stored
- * @param n_segments_stored
- * @param num_points_offsets_first
- * @param num_segments_offsets_first
- * @param points_first
- * @param segments_first
+ * Each thread operates on one segment in `multilinestrings1`, iterates over all segments in the
+ * other multilinestring.
  */
 template <typename MultiLinestringRange1,
           typename MultiLinestringRange2,
@@ -187,19 +169,19 @@ void __global__ pairwise_linestring_intersection_simple(MultiLinestringRange1 mu
 }  // namespace detail
 
 /**
- * @brief Compute intersections between multilnestrings.
+ * @brief Compute intersections between multilnestrings with duplicates.
  */
 template <typename MultiLinestringRange1,
           typename MultiLinestringRange2,
           typename index_t,
           typename T>
-intersection_result<T, index_t> pairwise_linestring_intersection_with_duplicate(
+linestring_intersection_result<T, index_t> pairwise_linestring_intersection_with_duplicate(
   MultiLinestringRange1 multilinestrings1,
   MultiLinestringRange2 multilinestrings2,
   rmm::mr::device_memory_resource* mr,
   rmm::cuda_stream_view stream)
 {
-  using types_t = typename intersection_result<T, index_t>::types_t;
+  using types_t = typename linestring_intersection_result<T, index_t>::types_t;
 
   static_assert(is_same_floating_point<T, typename MultiLinestringRange2::element_t>(),
                 "Inputs and output must have the same floating point value type.");
@@ -318,15 +300,15 @@ intersection_result<T, index_t> pairwise_linestring_intersection_with_duplicate(
   auto offsets_buffer = detail::compute_offset_buffer<index_t>(types_buffer, mr, stream);
 
   auto dummy = rmm::device_uvector<index_t>(0, stream, mr);
-  return intersection_result<T, index_t>{std::move(geometry_collection_offset),
-                                         std::move(types_buffer),
-                                         std::move(offsets_buffer),
-                                         std::move(points),
-                                         std::move(segments),
-                                         std::move(lhs_linestring_id),
-                                         std::move(lhs_segment_id),
-                                         std::move(rhs_linestring_id),
-                                         std::move(rhs_segment_id)};
+  return linestring_intersection_result<T, index_t>{std::move(geometry_collection_offset),
+                                                    std::move(types_buffer),
+                                                    std::move(offsets_buffer),
+                                                    std::move(points),
+                                                    std::move(segments),
+                                                    std::move(lhs_linestring_id),
+                                                    std::move(lhs_segment_id),
+                                                    std::move(rhs_linestring_id),
+                                                    std::move(rhs_segment_id)};
 }
 
 }  // namespace cuspatial
