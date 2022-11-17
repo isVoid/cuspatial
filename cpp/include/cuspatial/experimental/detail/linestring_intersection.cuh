@@ -142,9 +142,11 @@ void __global__ pairwise_linestring_intersection_simple(MultiLinestringRange1 mu
        idx += gridDim.x * blockDim.x) {
     auto const part_idx = multilinestrings1.part_idx_from_point_idx(idx);
     if (!multilinestrings1.is_valid_segment_id(idx, part_idx)) continue;
-    auto const geometry_idx     = multilinestrings1.geometry_idx_from_part_idx(part_idx);
-    auto [a, b]                 = multilinestrings1.segment(idx);
-    auto const multilinestring2 = multilinestrings2[geometry_idx];
+    auto const lhs_linestring_idx = multilinestrings1.intra_part_idx(part_idx);
+    auto const lhs_segment_idx    = multilinestrings1.intra_point_idx(idx);
+    auto [a, b]                   = multilinestrings1.segment(idx);
+    auto const geometry_idx       = multilinestrings1.geometry_idx_from_part_idx(part_idx);
+    auto const multilinestring2   = multilinestrings2[geometry_idx];
 
     for (auto rhs_linestring_idx = 0; rhs_linestring_idx < multilinestring2.size();
          ++rhs_linestring_idx) {
@@ -158,17 +160,24 @@ void __global__ pairwise_linestring_intersection_simple(MultiLinestringRange1 mu
           auto r              = cuda::atomic_ref<count_t>{*(n_points_stored + geometry_idx)};
           auto next_point_idx = r.fetch_add(1);
           points_first[num_points_offsets_first[geometry_idx] + next_point_idx] = point_opt.value();
-          types_code_first[geometry_collection_offset_first[geometry_idx] + next_point_idx] =
-            IntersectionTypeCode::POINT;
+          auto union_column_idx = geometry_collection_offset_first[geometry_idx] + next_point_idx;
+          types_code_first[union_column_idx]        = IntersectionTypeCode::POINT;
+          lhs_linestring_id_first[union_column_idx] = lhs_linestring_idx;
+          lhs_segment_id_first[union_column_idx]    = lhs_segment_idx;
+          rhs_linestring_id_first[union_column_idx] = rhs_linestring_idx;
+          rhs_segment_id_first[union_column_idx]    = rhs_segment_idx;
         } else if (segment_opt.has_value()) {
           auto r                = cuda::atomic_ref<count_t>{*(n_segments_stored + geometry_idx)};
           auto next_segment_idx = r.fetch_add(1);
           segments_first[num_segments_offsets_first[geometry_idx] + next_segment_idx] =
             segment_opt.value();
-
-          types_code_first[geometry_collection_offset_first[geometry_idx] +
-                           num_points_per_pair_first[geometry_idx] + next_segment_idx] =
-            IntersectionTypeCode::LINESTRING;
+          auto union_column_idx = geometry_collection_offset_first[geometry_idx] +
+                                  num_points_per_pair_first[geometry_idx] + next_segment_idx;
+          types_code_first[union_column_idx]        = IntersectionTypeCode::LINESTRING;
+          lhs_linestring_id_first[union_column_idx] = lhs_linestring_idx;
+          lhs_segment_id_first[union_column_idx]    = lhs_segment_idx;
+          rhs_linestring_id_first[union_column_idx] = rhs_linestring_idx;
+          rhs_segment_id_first[union_column_idx]    = rhs_segment_idx;
         }
       }
     }
@@ -314,10 +323,10 @@ intersection_result<T, index_t> pairwise_linestring_intersection_with_duplicate(
                                          std::move(offsets_buffer),
                                          std::move(points),
                                          std::move(segments),
-                                         std::move(dummy),
-                                         std::move(dummy),
-                                         std::move(dummy),
-                                         std::move(dummy)};
+                                         std::move(lhs_linestring_id),
+                                         std::move(lhs_segment_id),
+                                         std::move(rhs_linestring_id),
+                                         std::move(rhs_segment_id)};
 }
 
 }  // namespace cuspatial

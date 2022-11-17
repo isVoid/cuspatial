@@ -48,10 +48,8 @@ struct intersection_result {
   rmm::device_uvector<segment_t> segments_coords;
 
   // look-back indices
-  rmm::device_uvector<index_t> lhs_id_offsets;
   rmm::device_uvector<index_t> lhs_linestring_id;
   rmm::device_uvector<index_t> lhs_segment_id;
-  rmm::device_uvector<index_t> rhs_id_offsets;
   rmm::device_uvector<index_t> rhs_linestring_id;
   rmm::device_uvector<index_t> rhs_segment_id;
 };
