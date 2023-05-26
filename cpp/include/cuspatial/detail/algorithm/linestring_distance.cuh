@@ -21,7 +21,16 @@
 
 #include <rmm/device_uvector.hpp>
 
+#include <thrust/binary_search.h>
 #include <thrust/optional.h>
+
+#include <cub/cub.cuh>
+
+#include <cooperative_groups.h>
+
+#include <limits>
+
+namespace cg = cooperative_groups;
 
 namespace cuspatial {
 namespace detail {
@@ -70,6 +79,79 @@ __global__ void linestring_distance(MultiLinestringRange1 multilinestrings1,
     }
     atomicMin(&distances_first[geometry_idx], static_cast<T>(sqrt(min_distance_squared)));
   }
+}
+
+template <typename T, typename MultiLineString>
+auto __device__ segment_multilinestring_distance(segment<T> s, MultiLineString multilinestring)
+{
+  T min_distance_squared = std::numeric_limits<T>::max();
+
+  auto [a, b] = s;
+  for (auto const& linestring : multilinestring)
+    for (auto [c, d] : linestring)
+    {
+      // printf("blockid: %d from: (%f, %f) -> (%f, %f) to: (%f, %f) -> (%f, %f)\n", static_cast<int>(cg::this_grid().block_rank()), a.x, a.y, b.x, b.y, c.x, c.y, d.x, d.y);
+      min_distance_squared = min(min_distance_squared, squared_segment_distance(a, b, c, d));
+    }
+
+  return min_distance_squared;
+}
+
+template <typename MultiLineString1, typename MultiLineString2>
+auto __device__ linestring_distance_thread(
+                                           MultiLineString1 lhs,
+                                           MultiLineString2 rhs)
+{
+  using T = typename MultiLineString1::element_t;
+
+  auto rank = cg::this_thread_block().thread_rank();
+  auto block_size            = cg::this_thread_block().size();
+  std::size_t points_per_thread = (lhs.num_points() + block_size - 1) / block_size;
+
+  T min_distance_squared = std::numeric_limits<T>::max();
+
+  // printf("thread_rank: %d points_per_thread: %d\n", static_cast<int>(rank), static_cast<int>(points_per_thread));
+
+  for (auto i = rank * points_per_thread;
+       i < (rank + 1) * points_per_thread && i < lhs.num_points();
+       ++i) {
+    auto it = thrust::upper_bound(thrust::seq, lhs.local_part_begin(), lhs.local_part_end(), i);
+    auto local_part_idx = thrust::distance(lhs.local_part_begin(), thrust::prev(it));
+    if (!lhs.is_valid_segment_id(i, local_part_idx)) continue;
+
+    vec_2d<T> a = lhs.point_begin()[i];
+    vec_2d<T> b = lhs.point_begin()[i + 1];
+
+    min_distance_squared =
+      min(min_distance_squared, segment_multilinestring_distance(segment<T>{a, b}, rhs));
+
+    // printf("thread_rank: %d local_point_index: %d local_part_idx: %d \n",
+    //        static_cast<int>(rank),
+    //        static_cast<int>(i),
+    //        static_cast<int>(local_part_idx));
+
+  }
+
+  return min_distance_squared;
+}
+
+template <std::size_t BlockSize, typename MultiLinestringsIter1, typename MultiLinestringsIter2, typename OutputIt>
+void __global__ linestring_distance_block(MultiLinestringsIter1 lhs,
+                                          MultiLinestringsIter2 rhs,
+                                          OutputIt dist)
+{
+  using T = typename MultiLinestringsIter1::element_t;
+  using BlockReduce = cub::BlockReduce<T, BlockSize>;
+
+  auto id  = cg::this_grid().block_rank();
+  // printf("BlockID: %d\n", static_cast<int>(id));
+  T partial = std::sqrt(linestring_distance_thread(lhs[id], rhs[id]));
+
+  __shared__ typename BlockReduce::TempStorage temp_storage;
+
+  T result = BlockReduce(temp_storage).Reduce(partial, cub::Min());
+
+  if (cg::this_thread_block().thread_rank() == 0) dist[id] = result;
 }
 
 }  // namespace detail

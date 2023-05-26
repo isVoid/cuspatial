@@ -19,6 +19,7 @@
 #include <cuspatial/cuda_utils.hpp>
 #include <cuspatial/geometry/linestring_ref.cuh>
 #include <cuspatial/iterator_factory.cuh>
+#include <cuspatial/traits.hpp>
 
 #include <thrust/iterator/transform_iterator.h>
 
@@ -42,6 +43,22 @@ struct to_linestring_functor {
   }
 };
 
+template <typename PartIterator>
+struct to_local_offset_functor {
+
+  using index_t = iterator_value_type<PartIterator>;
+
+  PartIterator part_begin;
+
+  CUSPATIAL_HOST_DEVICE index_t operator()(index_t i)
+  {
+    return part_begin[i] - part_begin[0];
+  }
+};
+
+template<typename PartIterator>
+to_local_offset_functor(PartIterator) -> to_local_offset_functor<PartIterator>;
+
 template <typename PartIterator, typename VecIterator>
 class multilinestring_ref;
 
@@ -59,6 +76,13 @@ CUSPATIAL_HOST_DEVICE auto multilinestring_ref<PartIterator, VecIterator>::num_l
 }
 
 template <typename PartIterator, typename VecIterator>
+CUSPATIAL_HOST_DEVICE auto multilinestring_ref<PartIterator, VecIterator>::num_points() const
+{
+  return thrust::distance(_point_begin, _point_end);
+}
+
+
+template <typename PartIterator, typename VecIterator>
 CUSPATIAL_HOST_DEVICE auto multilinestring_ref<PartIterator, VecIterator>::part_begin() const
 {
   return detail::make_counting_transform_iterator(0,
@@ -74,13 +98,24 @@ CUSPATIAL_HOST_DEVICE auto multilinestring_ref<PartIterator, VecIterator>::part_
 template <typename PartIterator, typename VecIterator>
 CUSPATIAL_HOST_DEVICE auto multilinestring_ref<PartIterator, VecIterator>::point_begin() const
 {
-  return _point_begin;
+  return thrust::next(_point_begin, *_part_begin);
 }
 
 template <typename PartIterator, typename VecIterator>
 CUSPATIAL_HOST_DEVICE auto multilinestring_ref<PartIterator, VecIterator>::point_end() const
 {
-  return _point_end;
+  return thrust::next(_point_begin + *thrust::next(_part_begin));
+}
+
+template <typename PartIterator, typename VecIterator>
+template <typename IndexType1, typename IndexType2>
+CUSPATIAL_HOST_DEVICE bool multilinestring_ref<PartIterator, VecIterator>::is_valid_segment_id(
+  IndexType1 segment_idx, IndexType2 local_part_idx) const
+{
+  if constexpr (std::is_signed_v<IndexType1>)
+    return segment_idx >= 0 && segment_idx < (local_part_begin()[local_part_idx + 1] - 1);
+  else
+    return segment_idx < (local_part_begin()[local_part_idx + 1] - 1);
 }
 
 template <typename PartIterator, typename VecIterator>
@@ -89,6 +124,20 @@ CUSPATIAL_HOST_DEVICE auto multilinestring_ref<PartIterator, VecIterator>::opera
   IndexType i) const
 {
   return *(part_begin() + i);
+}
+
+template <typename PartIterator, typename VecIterator>
+CUSPATIAL_HOST_DEVICE auto multilinestring_ref<PartIterator, VecIterator>::local_part_begin() const
+{
+  return detail::make_counting_transform_iterator(
+    0, to_local_offset_functor{_part_begin}
+  );
+}
+
+template <typename PartIterator, typename VecIterator>
+CUSPATIAL_HOST_DEVICE auto multilinestring_ref<PartIterator, VecIterator>::local_part_end() const
+{
+  return local_part_begin() + num_linestrings();
 }
 
 }  // namespace cuspatial

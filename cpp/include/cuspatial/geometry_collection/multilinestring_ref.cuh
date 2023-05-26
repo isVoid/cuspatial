@@ -17,6 +17,7 @@
 
 #include <cuspatial/cuda_utils.hpp>
 #include <cuspatial/detail/range/enumerate_range.cuh>
+#include <cuspatial/traits.hpp>
 
 namespace cuspatial {
 
@@ -29,12 +30,17 @@ namespace cuspatial {
 template <typename PartIterator, typename VecIterator>
 class multilinestring_ref {
  public:
+
+  using element_t = iterator_vec_base_type<VecIterator>;
+
   CUSPATIAL_HOST_DEVICE multilinestring_ref(PartIterator part_begin,
                                             PartIterator part_end,
                                             VecIterator point_begin,
                                             VecIterator point_end);
   /// Return the number of linestrings in the multilinestring.
   CUSPATIAL_HOST_DEVICE auto num_linestrings() const;
+
+  CUSPATIAL_HOST_DEVICE auto num_points() const;
   /// Return the number of linestrings in the multilinestring.
   CUSPATIAL_HOST_DEVICE auto size() const { return num_linestrings(); }
 
@@ -53,12 +59,18 @@ class multilinestring_ref {
   /// Return iterator to one past the last linestring of the multilinestring.
   CUSPATIAL_HOST_DEVICE auto end() const { return part_end(); }
 
+  template<typename IndexType1, typename IndexType2>
+  CUSPATIAL_HOST_DEVICE bool is_valid_segment_id(IndexType1 segment_id, IndexType2 local_part_idx) const;
+
   /// Return an enumerated range to the linestrings.
   CUSPATIAL_HOST_DEVICE auto enumerate() const { return detail::enumerate_range{begin(), end()}; }
 
   /// Return `linestring_idx`th linestring in the multilinestring.
   template <typename IndexType>
   CUSPATIAL_HOST_DEVICE auto operator[](IndexType linestring_idx) const;
+
+  CUSPATIAL_HOST_DEVICE auto local_part_begin() const;
+  CUSPATIAL_HOST_DEVICE auto local_part_end() const;
 
  protected:
   PartIterator _part_begin;

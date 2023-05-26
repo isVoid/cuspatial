@@ -59,11 +59,10 @@ OutputIt pairwise_linestring_distance(MultiLinestringRange1 multilinestrings1,
                std::numeric_limits<T>::max());
 
   std::size_t constexpr threads_per_block = 256;
-  std::size_t const num_blocks =
-    (multilinestrings1.num_points() + threads_per_block - 1) / threads_per_block;
+  std::size_t const num_blocks = multilinestrings1.size();
 
-  detail::linestring_distance<<<num_blocks, threads_per_block, 0, stream.value()>>>(
-    multilinestrings1, multilinestrings2, thrust::nullopt, distances_first);
+  detail::linestring_distance_block<threads_per_block><<<num_blocks, threads_per_block, 0, stream.value()>>>(
+    multilinestrings1, multilinestrings2, distances_first);
 
   CUSPATIAL_CUDA_TRY(cudaGetLastError());
   return distances_first + multilinestrings1.size();
