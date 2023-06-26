@@ -19,6 +19,7 @@ DartConfiguration.tcl
 dist/
 cuspatial.egg-info/
 python/build
+_skbuild
 python/*/build
 python/cuspatial/*/_lib/**/*.cpp
 python/cuspatial/*/_lib/**/*.h
@@ -42,6 +43,11 @@ wheels/
 *.egg
 pip-log.txt
 pip-delete-this-directory.txt
+naturalearth_lowres_polygon.cpg
+naturalearth_lowres_polygon.dbf
+naturalearth_lowres_polygon.prj
+naturalearth_lowres_polygon.shp
+naturalearth_lowres_polygon.shx
 
 # Unit test / coverage reports
 htmlcov/
@@ -65,6 +71,9 @@ Debug
 build/
 cpp/build/
 cpp/thirdparty/googletest/
+
+## CI build directories
+build_rapidsai*/
 
 ## Eclipse IDE
 .project
@@ -137,3 +146,12 @@ ENV/
 
 # mypy
 .mypy_cache/
+
+# notebook/example generated files
+notebooks/taxi2016.csv
+notebooks/taxi2017.csv
+notebooks/tzones_lonlat.json
+notebooks/cu_taxi.zones.*
+
+# clang tooling
+compile_commands.json

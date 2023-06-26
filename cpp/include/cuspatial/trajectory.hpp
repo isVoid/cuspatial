@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, NVIDIA CORPORATION.
+ * Copyright (c) 2020-2022, NVIDIA CORPORATION.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,11 +16,21 @@
 
 #pragma once
 
+#include <cudf/column/column.hpp>
+#include <cudf/column/column_view.hpp>
+#include <cudf/table/table.hpp>
 #include <cudf/types.hpp>
+
+#include <rmm/mr/device/per_device_resource.hpp>
+
 #include <memory>
-#include <rmm/mr/device/default_memory_resource.hpp>
 
 namespace cuspatial {
+
+/**
+ * @addtogroup trajectory_api
+ * @{
+ */
 
 /**
  * @brief Derive trajectories from object ids, points, and timestamps.
@@ -118,5 +128,9 @@ std::unique_ptr<cudf::table> trajectory_bounding_boxes(
   cudf::column_view const& x,
   cudf::column_view const& y,
   rmm::mr::device_memory_resource* mr = rmm::mr::get_current_device_resource());
+
+/**
+ * @} // end of doxygen group
+ */
 
 }  // namespace cuspatial
