@@ -1,23 +1,52 @@
+# Copyright (c) 2019-2023, NVIDIA CORPORATION.
+
 repos:
-      - repo: https://github.com/timothycrosley/isort
-        rev: 5.0.4
+      - repo: https://github.com/PyCQA/isort
+        rev: 5.12.0
         hooks:
               - id: isort
-      - repo: https://github.com/ambv/black
-        rev: stable
+                # Use the config file specific to each subproject so that each
+                # project can specify its own first/third-party packages.
+                args: ["--config-root=python/", "--resolve-all-configs"]
+                files: python/.*
+                types_or: [python, cython, pyi]
+      - repo: https://github.com/psf/black
+        rev: 22.3.0
         hooks:
               - id: black
-      - repo: https://gitlab.com/pycqa/flake8
-        rev: 3.7.7
+                files: python/cuspatial/.*
+              # Explicitly specify the pyproject.toml at the repo root, not per-project.
+                args: ["--config", "pyproject.toml"]
+      - repo: https://github.com/PyCQA/flake8
+        rev: 5.0.4
         hooks:
               - id: flake8
-      - repo: https://gitlab.com/pycqa/flake8
-        rev: 3.7.7
+                args: ["--config=.flake8"]
+                files: python/.*$
+                types: [file]
+                types_or: [python, cython]
+                additional_dependencies: ["flake8-force"]
+      - repo: https://github.com/MarcoGorelli/cython-lint
+        rev: v0.1.10
         hooks:
-              - id: flake8
-                alias: flake8-cython
-                name: flake8-cython
-                args: ["--config=python/cuspatial/.flake8.cython"]
-                types: [cython]
+              - id: cython-lint
+      - repo: https://github.com/pre-commit/mirrors-clang-format
+        rev: v15.0.7
+        hooks:
+              - id: clang-format
+                types_or: [c, c++, cuda]
+                args: ["-fallback-style=none", "-style=file", "-i"]
+      - repo: https://github.com/codespell-project/codespell
+        rev: v2.2.4
+        hooks:
+              - id: codespell
+                args: ["--config pyproject.toml"]
+                additional_dependencies: ["tomli"]
+      - repo: https://github.com/rapidsai/dependency-file-generator
+        rev: v1.5.1
+        hooks:
+            - id: rapids-dependency-file-generator
+              args: ["--clean"]
+
 default_language_version:
       python: python3
