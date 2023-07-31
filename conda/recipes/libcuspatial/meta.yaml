@@ -1,48 +1,117 @@
-# Copyright (c) 2018, NVIDIA CORPORATION.
+# Copyright (c) 2018-2023, NVIDIA CORPORATION.
 
-{% set version = environ.get('GIT_DESCRIBE_TAG', '0.0.0.dev').lstrip('v') + environ.get('VERSION_SUFFIX', '') %}
-{% set minor_version =  version.split('.')[0] + '.' + version.split('.')[1] %}
-{% set cuda_version='.'.join(environ.get('CUDA_VERSION', '9.2').split('.')[:2]) %}
+{% set version = environ.get('GIT_DESCRIBE_TAG', '0.0.0.dev').lstrip('v') %}
+{% set minor_version = version.split('.')[0] + '.' + version.split('.')[1] %}
+{% set cuda_version = '.'.join(environ['RAPIDS_CUDA_VERSION'].split('.')[:2]) %}
+{% set cuda_major = cuda_version.split('.')[0] %}
+{% set date_string = environ['RAPIDS_DATE_STRING'] %}
 
 package:
-  name: libcuspatial
-  version: {{ version }}
+  name: libcuspatial-split
 
 source:
   git_url: ../../..
 
 build:
-  number: {{ GIT_DESCRIBE_NUMBER }}
-  string: cuda{{ cuda_version }}_{{ GIT_DESCRIBE_HASH }}_{{ GIT_DESCRIBE_NUMBER }}
   script_env:
-    - CC
-    - CXX
-    - CUDAHOSTCXX
+    - AWS_ACCESS_KEY_ID
+    - AWS_SECRET_ACCESS_KEY
+    - AWS_SESSION_TOKEN
+    - CMAKE_C_COMPILER_LAUNCHER
+    - CMAKE_CUDA_COMPILER_LAUNCHER
+    - CMAKE_CXX_COMPILER_LAUNCHER
+    - CMAKE_GENERATOR
     - PARALLEL_LEVEL
-    - CUDF_HOME
-    - VERSION_SUFFIX
-  run_exports:
-    - {{ pin_subpackage("libcuspatial", max_pin="x.x") }}
+    - SCCACHE_BUCKET
+    - SCCACHE_IDLE_TIMEOUT
+    - SCCACHE_REGION
+    - SCCACHE_S3_KEY_PREFIX=libcuspatial-aarch64 # [aarch64]
+    - SCCACHE_S3_KEY_PREFIX=libcuspatial-linux64 # [linux64]
+    - SCCACHE_S3_USE_SSL
+    - SCCACHE_S3_NO_CREDENTIALS
 
 requirements:
   build:
-    - cmake >=3.12.4
+    - {{ compiler('c') }}
+    - {{ compiler('cxx') }}
+    {% if cuda_major == "11" %}
+    - {{ compiler('cuda11') }} ={{ cuda_version }}
+    {% else %}
+    - {{ compiler('cuda') }}
+    {% endif %}
+    - cuda-version ={{ cuda_version }}
+    - cmake {{ cmake_version }}
+    - ninja
+    - sysroot_{{ target_platform }} {{ sysroot_version }}
   host:
-    - libcudf {{ minor_version }}.*
-    - librmm {{ minor_version }}.*
-    - cudatoolkit {{ cuda_version }}.*
-    - gdal >=3.0.2,<3.1.0a0
-  run:
-    - {{ pin_compatible('cudatoolkit', max_pin='x.x') }}
+    - cuda-version ={{ cuda_version }}
+    - doxygen
+    - gmock {{ gtest_version }}
+    - gtest {{ gtest_version }}
+    - libcudf ={{ minor_version }}
+    - librmm ={{ minor_version }}
+    - sqlite
+    - proj
 
-test:
-  commands:
-    - test -f $PREFIX/lib/libcuspatial.so
+outputs:
+  - name: libcuspatial
+    version: {{ version }}
+    script: install_libcuspatial.sh
+    build:
+      number: {{ GIT_DESCRIBE_NUMBER }}
+      string: cuda{{ cuda_major }}_{{ date_string }}_{{ GIT_DESCRIBE_HASH }}_{{ GIT_DESCRIBE_NUMBER }}
+      run_exports:
+        - {{ pin_subpackage("libcuspatial", max_pin="x.x") }}
+    requirements:
+      build:
+        - cmake {{ cmake_version }}
+      host:
+        - cuda-version ={{ cuda_version }}
+        {% if cuda_major == "11" %}
+        - cudatoolkit
+        {% else %}
+        - cuda-cudart-dev
+        {% endif %}
+      run:
+        - {{ pin_compatible('cuda-version', max_pin='x', min_pin='x') }}
+        {% if cuda_major == "11" %}
+        - cudatoolkit
+        {% endif %}
+        - libcudf ={{ minor_version }}
+        - librmm ={{ minor_version }}
+        - sqlite
+        - proj
+    test:
+      commands:
+        - test -f $PREFIX/lib/libcuspatial.so
+    about:
+      home: https://rapids.ai/
+      license: Apache-2.0
+      license_family: Apache
+      license_file: LICENSE
+      summary: libcuspatial library
 
-about:
-  home: http://rapids.ai/
-  license: Apache-2.0
-  license_family: Apache
-  license_file: LICENSE
-  summary: libcuspatial library
-
+  - name: libcuspatial-tests
+    version: {{ version }}
+    script: install_libcuspatial_tests.sh
+    build:
+      number: {{ GIT_DESCRIBE_NUMBER }}
+      string: cuda{{ cuda_major }}_{{ date_string }}_{{ GIT_DESCRIBE_HASH }}_{{ GIT_DESCRIBE_NUMBER }}
+    requirements:
+      build:
+        - cmake {{ cmake_version }}
+      host:
+        - cuda-version ={{ cuda_version }}
+        {% if cuda_major == "11" %}
+        - cudatoolkit
+        {% else %}
+        - cuda-cudart-dev
+        {% endif %}
+      run:
+        - {{ pin_subpackage('libcuspatial', exact=True) }}
+        {% if cuda_major == "11" %}
+        - cudatoolkit
+        {% endif %}
+        - {{ pin_compatible('cuda-version', max_pin='x', min_pin='x') }}
+        - gmock {{ gtest_version }}
+        - gtest {{ gtest_version }}

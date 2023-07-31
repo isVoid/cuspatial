@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, NVIDIA CORPORATION.
+ * Copyright (c) 2020-2022, NVIDIA CORPORATION.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,19 +14,17 @@
  * limitations under the License.
  */
 
-#include <rmm/thrust_rmm_allocator.h>
-
-#include <thrust/iterator/constant_iterator.h>
-#include <thrust/iterator/discard_iterator.h>
+#include <cuspatial/error.hpp>
+#include <cuspatial/iterator_factory.cuh>
+#include <cuspatial/trajectory.cuh>
 
 #include <cudf/column/column_factories.hpp>
 #include <cudf/copying.hpp>
-#include <cudf/detail/sorting.hpp>
 #include <cudf/table/table.hpp>
-#include <cudf/table/table_view.hpp>
+#include <cudf/utilities/type_dispatcher.hpp>
 
-#include <cuspatial/error.hpp>
-#include <cuspatial/trajectory.hpp>
+#include <rmm/cuda_stream_view.hpp>
+#include <rmm/exec_policy.hpp>
 
 #include <memory>
 #include <vector>
@@ -34,41 +32,80 @@
 namespace cuspatial {
 namespace detail {
 
+struct derive_trajectories_dispatch {
+  template <
+    typename T,
+    typename Timestamp,
+    std::enable_if_t<std::is_floating_point_v<T> and cudf::is_timestamp<Timestamp>()>* = nullptr>
+  std::pair<std::unique_ptr<cudf::table>, std::unique_ptr<cudf::column>> operator()(
+    cudf::column_view const& object_id,
+    cudf::column_view const& x,
+    cudf::column_view const& y,
+    cudf::column_view const& timestamp,
+    rmm::cuda_stream_view stream,
+    rmm::mr::device_memory_resource* mr)
+  {
+    auto cols = std::vector<std::unique_ptr<cudf::column>>{};
+    cols.reserve(4);
+    cols.push_back(cudf::allocate_like(object_id, cudf::mask_allocation_policy::NEVER, stream, mr));
+    cols.push_back(cudf::allocate_like(x, cudf::mask_allocation_policy::NEVER, stream, mr));
+    cols.push_back(cudf::allocate_like(y, cudf::mask_allocation_policy::NEVER, stream, mr));
+    cols.push_back(cudf::allocate_like(timestamp, cudf::mask_allocation_policy::NEVER, stream, mr));
+
+    auto points_begin     = thrust::make_zip_iterator(x.begin<T>(), y.begin<T>());
+    auto points_out_begin = thrust::make_zip_iterator(cols[1]->mutable_view().begin<T>(),
+                                                      cols[2]->mutable_view().begin<T>());
+
+    auto offsets = derive_trajectories(object_id.begin<std::int32_t>(),
+                                       object_id.end<std::int32_t>(),
+                                       points_begin,
+                                       timestamp.begin<Timestamp>(),
+                                       cols[0]->mutable_view().begin<std::int32_t>(),
+                                       points_out_begin,
+                                       cols[3]->mutable_view().begin<Timestamp>(),
+                                       stream,
+                                       mr);
+
+    auto result_table = std::make_unique<cudf::table>(std::move(cols));
+
+    auto num_trajectories = offsets->size();
+
+    auto offsets_column = std::make_unique<cudf::column>(cudf::data_type{cudf::type_id::INT32},
+                                                         num_trajectories,
+                                                         offsets->release(),
+                                                         rmm::device_buffer{},
+                                                         0);
+
+    return {std::move(result_table), std::move(offsets_column)};
+  }
+
+  template <typename T,
+            typename Timestamp,
+            std::enable_if_t<not(std::is_floating_point_v<T> and
+                                 cudf::is_timestamp<Timestamp>())>* = nullptr>
+  std::pair<std::unique_ptr<cudf::table>, std::unique_ptr<cudf::column>> operator()(...)
+  {
+    CUSPATIAL_FAIL("Unsupported data type");
+  }
+};
+
 std::pair<std::unique_ptr<cudf::table>, std::unique_ptr<cudf::column>> derive_trajectories(
   cudf::column_view const& object_id,
   cudf::column_view const& x,
   cudf::column_view const& y,
   cudf::column_view const& timestamp,
-  rmm::mr::device_memory_resource* mr,
-  cudaStream_t stream)
+  rmm::cuda_stream_view stream,
+  rmm::mr::device_memory_resource* mr)
 {
-  auto sorted = cudf::detail::sort_by_key(cudf::table_view{{object_id, x, y, timestamp}},
-                                          cudf::table_view{{object_id, timestamp}},
-                                          {},
-                                          {},
-                                          mr,
-                                          stream);
-
-  auto policy    = rmm::exec_policy(stream);
-  auto sorted_id = sorted->get_column(0).view();
-  rmm::device_vector<int32_t> lengths(object_id.size());
-  auto grouped = thrust::reduce_by_key(policy->on(stream),
-                                       sorted_id.begin<int32_t>(),
-                                       sorted_id.end<int32_t>(),
-                                       thrust::make_constant_iterator(1),
-                                       thrust::make_discard_iterator(),
-                                       lengths.begin());
-
-  auto offsets = cudf::make_numeric_column(cudf::data_type{cudf::type_id::INT32},
-                                           thrust::distance(lengths.begin(), grouped.second),
-                                           cudf::mask_state::UNALLOCATED,
-                                           stream,
-                                           mr);
-
-  thrust::exclusive_scan(
-    policy->on(stream), lengths.begin(), lengths.end(), offsets->mutable_view().begin<int32_t>());
-
-  return std::make_pair(std::move(sorted), std::move(offsets));
+  return cudf::double_type_dispatcher(x.type(),
+                                      timestamp.type(),
+                                      derive_trajectories_dispatch{},
+                                      object_id,
+                                      x,
+                                      y,
+                                      timestamp,
+                                      stream,
+                                      mr);
 }
 }  // namespace detail
 
@@ -82,11 +119,14 @@ std::pair<std::unique_ptr<cudf::table>, std::unique_ptr<cudf::column>> derive_tr
   CUSPATIAL_EXPECTS(
     x.size() == y.size() && x.size() == object_id.size() && x.size() == timestamp.size(),
     "Data size mismatch");
-  CUSPATIAL_EXPECTS(object_id.type().id() == cudf::type_id::INT32, "Invalid object_id datatype");
+  CUSPATIAL_EXPECTS(x.type().id() == y.type().id(), "Data type mismatch");
+  CUSPATIAL_EXPECTS(object_id.type().id() == cudf::type_to_id<cudf::size_type>(),
+                    "Invalid object_id type");
   CUSPATIAL_EXPECTS(cudf::is_timestamp(timestamp.type()), "Invalid timestamp datatype");
   CUSPATIAL_EXPECTS(
     !(x.has_nulls() || y.has_nulls() || object_id.has_nulls() || timestamp.has_nulls()),
     "NULL support unimplemented");
+
   if (object_id.is_empty() || x.is_empty() || y.is_empty() || timestamp.is_empty()) {
     std::vector<std::unique_ptr<cudf::column>> cols{};
     cols.reserve(4);
@@ -97,6 +137,6 @@ std::pair<std::unique_ptr<cudf::table>, std::unique_ptr<cudf::column>> derive_tr
     return std::make_pair(std::make_unique<cudf::table>(std::move(cols)),
                           cudf::make_empty_column(cudf::data_type{cudf::type_id::INT32}));
   }
-  return detail::derive_trajectories(object_id, x, y, timestamp, mr, 0);
+  return detail::derive_trajectories(object_id, x, y, timestamp, rmm::cuda_stream_default, mr);
 }
 }  // namespace cuspatial

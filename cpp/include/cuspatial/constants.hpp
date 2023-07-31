@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, NVIDIA CORPORATION.
+ * Copyright (c) 2020-2022, NVIDIA CORPORATION.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,12 +14,28 @@
  * limitations under the License.
  */
 
+#pragma once
+
 #include <math.h>
 
-#pragma once
+/**
+ * @addtogroup cuspatial_constants
+ * @{
+ */
+
+namespace cuspatial {
 
 constexpr double DEGREE_TO_RADIAN = M_PI / 180.0;
 constexpr double RADIAN_TO_DEGREE = 180.0 / M_PI;
+constexpr double CIRCLE_DEGREES   = 360.0;
 
 constexpr double EARTH_RADIUS_KM                = 6371.0;
 constexpr double EARTH_CIRCUMFERENCE_EQUATOR_KM = 40000.0;
+constexpr double EARTH_CIRCUMFERENCE_KM_PER_DEGREE =
+  EARTH_CIRCUMFERENCE_EQUATOR_KM / CIRCLE_DEGREES;
+
+}  // namespace cuspatial
+
+/**
+ * @} // end of doxygen group
+ */

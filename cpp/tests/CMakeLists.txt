@@ -1,5 +1,5 @@
 ﻿#=============================================================================
-# Copyright (c) 2019-2020, NVIDIA CORPORATION.
+# Copyright (c) 2019-2023, NVIDIA CORPORATION.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,151 +13,233 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #=============================================================================
-cmake_minimum_required(VERSION 3.12 FATAL_ERROR)
-
-project(CUSPATIAL_TESTS LANGUAGES C CXX CUDA)
-
-if(NOT CMAKE_CUDA_COMPILER)
-  message(SEND_ERROR "CMake cannot locate a CUDA compiler")
-endif()
-
-###################################################################################################
-# - common test utils -----------------------------------------------------------------------------
-
-find_library(CUDFTESTUTIL_LIBRARY "libcudftestutil.a"
-             HINTS "$ENV{CUDF_ROOT}/lib")
-
-message(STATUS "CUDFTESTUTIL: CUDFTESTUTIL_LIBRARY set to ${CUDFTESTUTIL_LIBRARY}")
-message(STATUS "CUDFTESTUTIL: CUDF_TEST_INCLUDE set to ${CUDF_TEST_INCLUDE}")
-
-add_library(cudftestutil STATIC IMPORTED ${CUDFTESTUTIL_LIBRARY})
-
-if (CUDF_TEST_INCLUDE AND CUDFTESTUTIL_LIBRARY)
-    set_target_properties(cudftestutil PROPERTIES IMPORTED_LOCATION ${CUDFTESTUTIL_LIBRARY})
-endif (CUDF_TEST_INCLUDE AND CUDFTESTUTIL_LIBRARY)
 
 ###################################################################################################
 # - compiler function -----------------------------------------------------------------------------
 
-function(ConfigureTest CMAKE_TEST_NAME CMAKE_TEST_SRC)
-    add_executable(${CMAKE_TEST_NAME}
-                ${CMAKE_TEST_SRC})
-    set_target_properties(${CMAKE_TEST_NAME} PROPERTIES POSITION_INDEPENDENT_CODE ON)
-    target_link_libraries(${CMAKE_TEST_NAME} gmock gtest gmock_main gtest_main pthread cuspatial cudf
-                        cudftestutil rmm cudart cuda "${ARROW_LIB}" ${ZLIB_LIBRARIES}
-                        nvrtc GDAL::GDAL)
-    if(USE_NVTX)
-        target_link_libraries(${CMAKE_TEST_NAME} ${NVTX_LIBRARY})
-    endif(USE_NVTX)
-    set_target_properties(${CMAKE_TEST_NAME} PROPERTIES
-                            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/gtests")
+function(ConfigureTest CMAKE_TEST_NAME)
+    add_executable(${CMAKE_TEST_NAME} ${ARGN})
+    target_compile_options(${CMAKE_TEST_NAME}
+                PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:${CUSPATIAL_CXX_FLAGS}>"
+                        "$<$<COMPILE_LANGUAGE:CUDA>:${CUSPATIAL_CUDA_FLAGS}>")
+    target_include_directories(${CMAKE_TEST_NAME}
+                PRIVATE "$<BUILD_INTERFACE:${CUSPATIAL_SOURCE_DIR}>"
+                        "$<BUILD_INTERFACE:${CUSPATIAL_SOURCE_DIR}/src>")
+    set_target_properties(
+        ${CMAKE_TEST_NAME}
+        PROPERTIES RUNTIME_OUTPUT_DIRECTORY "$<BUILD_INTERFACE:${CUSPATIAL_BINARY_DIR}/gtests>"
+                   INSTALL_RPATH "\$ORIGIN/../../../lib"
+                   CXX_STANDARD 17
+                   CXX_STANDARD_REQUIRED ON
+                   CUDA_STANDARD 17
+                   CUDA_STANDARD_REQUIRED ON
+    )
+    target_link_libraries(${CMAKE_TEST_NAME} GTest::gtest_main GTest::gmock_main ranger::ranger cudf::cudftestutil cuspatial)
     add_test(NAME ${CMAKE_TEST_NAME} COMMAND ${CMAKE_TEST_NAME})
+    install(
+        TARGETS ${CMAKE_TEST_NAME}
+        COMPONENT testing
+        DESTINATION bin/gtests/libcuspatial
+        EXCLUDE_FROM_ALL
+    )
 endfunction(ConfigureTest)
 
 ###################################################################################################
-# - include paths ---------------------------------------------------------------------------------
-
-include_directories("${THRUST_INCLUDE_DIR}"
-                    "${LIBCUDACXX_INCLUDE_DIR}")
-
-if(CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES)
-	include_directories("${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES}")
-endif()
-
-include_directories("${CMAKE_BINARY_DIR}/include"
-                    "${CMAKE_SOURCE_DIR}/include"
-                    "${CMAKE_SOURCE_DIR}"
-                    "${CMAKE_SOURCE_DIR}/src"
-                    "${GDAL_INCLUDE_DIRS}"
-                    "${GTEST_INCLUDE_DIR}"
-                    "${RMM_INCLUDE}"
-                    "${CUDF_INCLUDE}"
-                    "${CUDF_TEST_INCLUDE}")
- 
+### test sources ##################################################################################
 ###################################################################################################
-# - library paths ---------------------------------------------------------------------------------
 
-link_directories("${CMAKE_CUDA_IMPLICIT_LINK_DIRECTORIES}" # CMAKE_CUDA_IMPLICIT_LINK_DIRECTORIES is an undocumented/unsupported variable containing the link directories for nvcc
-                 "${CMAKE_BINARY_DIR}/lib"
-                 "${GDAL_LIBRARIES}"
-                 "${CONDA_LINK_DIRS}"
-                 "${GTEST_LIBRARY_DIR}"
-                 "${RMM_LIBRARY}"
-                 "${CUDF_LIBRARY}"
-                 "${CUSPATIAL_LIBRARY}")
+# index
+ConfigureTest(POINT_QUADTREE_TEST
+    index/point_quadtree_test.cpp)
 
-set(CARTESIAN_PRODUCT_GROUP_INDEX_ITERATOR_TEST_SRC
-   "${CMAKE_CURRENT_SOURCE_DIR}/spatial/cartesian_product_group_index_iterator_test.cpp")
-ConfigureTest(CARTESIAN_PRODUCT_GROUP_INDEX_ITERATOR_TEST "${CARTESIAN_PRODUCT_GROUP_INDEX_ITERATOR_TEST_SRC}")
+# join
+ConfigureTest(JOIN_QUADTREE_AND_BOUNDING_BOXES_TEST
+    join/join_quadtree_and_bounding_boxes_test.cpp)
 
-set(CUBIC_SPLINE_TEST_SRC
-   "${CMAKE_CURRENT_SOURCE_DIR}/interpolate/cubic_spline_test.cpp")
- ConfigureTest(CUBIC_SPLINE_TEST "${CUBIC_SPLINE_TEST_SRC}")
+ConfigureTest(JOIN_POINT_TO_NEAREST_LINESTRING_TEST
+    join/quadtree_point_to_nearest_linestring_test.cpp)
 
-set(COORDINATE_TRANSFORM_TEST_SRC
-   "${CMAKE_CURRENT_SOURCE_DIR}/spatial/coordinate_transform_test.cu")
-ConfigureTest(COORDINATE_TRANSFORM_TEST "${COORDINATE_TRANSFORM_TEST_SRC}")
+ConfigureTest(JOIN_POINT_IN_POLYGON_TEST
+    join/quadtree_point_in_polygon_test.cpp)
 
-set(HAVERSINE_TEST_SRC
-   "${CMAKE_CURRENT_SOURCE_DIR}/spatial/haversine_test.cpp")
-ConfigureTest(HAVERSINE_TEST "${HAVERSINE_TEST_SRC}")
+# projection
+ConfigureTest(SINUSOIDAL_PROJECTION_TEST
+    projection/sinusoidal_projection_test.cpp)
 
-set(HAUSDORFF_TEST_SRC
-   "${CMAKE_CURRENT_SOURCE_DIR}/spatial/hausdorff_test.cpp")
-ConfigureTest(HAUSDORFF_TEST "${HAUSDORFF_TEST_SRC}")
+# bounding boxes
+ConfigureTest(LINESTRING_BOUNDING_BOXES_TEST
+    bounding_boxes/linestring_bounding_boxes_test.cpp)
 
-set(JOIN_POINT_IN_POLYGON_SMALL_TEST_SRC
-    "${CMAKE_CURRENT_SOURCE_DIR}/join/point_in_polygon_test_small.cpp")
-ConfigureTest(JOIN_POINT_IN_POLYGON_SMALL_TEST "${JOIN_POINT_IN_POLYGON_SMALL_TEST_SRC}")
+ConfigureTest(POLYGON_BOUNDING_BOXES_TEST
+    bounding_boxes/polygon_bounding_boxes_test.cpp)
 
-set(JOIN_POINT_IN_POLYGON_LARGE_TEST_SRC
-    "${CMAKE_CURRENT_SOURCE_DIR}/join/point_in_polygon_test_large.cpp")
-ConfigureTest(JOIN_POINT_IN_POLYGON_LARGE_TEST "${JOIN_POINT_IN_POLYGON_LARGE_TEST_SRC}")
+# distance
+ConfigureTest(HAVERSINE_TEST
+    distance/haversine_test.cpp)
 
-set(JOIN_POINT_TO_POLYLINE_SMALL_TEST_SRC
-    "${CMAKE_CURRENT_SOURCE_DIR}/join/point_to_nearest_polyline_test_small.cpp")
-ConfigureTest(JOIN_POINT_TO_POLYLINE_SMALL_TEST "${JOIN_POINT_TO_POLYLINE_SMALL_TEST_SRC}")
+ConfigureTest(HAUSDORFF_TEST
+    distance/hausdorff_test.cpp)
 
-set(POINT_IN_POLYGON_TEST_SRC
-    "${CMAKE_CURRENT_SOURCE_DIR}/spatial/point_in_polygon_test.cpp")
-ConfigureTest(POINT_IN_POLYGON_TEST "${POINT_IN_POLYGON_TEST_SRC}")
+ConfigureTest(POINT_DISTANCE_TEST
+    distance/point_distance_test.cpp)
 
-set(POINT_QUADTREE_TEST_SRC
-    "${CMAKE_CURRENT_SOURCE_DIR}/indexing/point_quadtree_test.cu")
-ConfigureTest(POINT_QUADTREE_TEST "${POINT_QUADTREE_TEST_SRC}")
+ConfigureTest(POINT_LINESTRING_DISTANCE_TEST
+    distance/point_linestring_distance_test.cpp)
 
-set(POLYLINE_BBOX_TEST_SRC
-    "${CMAKE_CURRENT_SOURCE_DIR}/spatial/polyline_bbox_test.cu")
-ConfigureTest(POLYLINE_BBOX_TEST "${POLYLINE_BBOX_TEST_SRC}")
+ConfigureTest(LINESTRING_DISTANCE_TEST
+    distance/linestring_distance_test.cpp)
 
-set(POLYGON_BBOX_TEST_SRC
-    "${CMAKE_CURRENT_SOURCE_DIR}/spatial/polygon_bbox_test.cu")
-ConfigureTest(POLYGON_BBOX_TEST "${POLYGON_BBOX_TEST_SRC}")
+ConfigureTest(POINT_POLYGON_DISTANCE_TEST
+    distance/point_polygon_distance_test.cpp)
 
-set(SHAPEFILE_READER_TEST_SRC
-    "${CMAKE_CURRENT_SOURCE_DIR}/io/shp/polygon_shapefile_reader_test.cpp")
-ConfigureTest(SHAPEFILE_READER_TEST "${SHAPEFILE_READER_TEST_SRC}")
+ConfigureTest(LINESTRING_POLYGON_DISTANCE_TEST
+    distance/linestring_polygon_distance_test.cpp)
 
-set(QUADTREE_POLYGON_FILTERING_SRC
-    "${CMAKE_CURRENT_SOURCE_DIR}/join/quadtree_polygon_filtering_test.cu")
-ConfigureTest(QUADTREE_POLYGON_FILTERING_TEST "${QUADTREE_POLYGON_FILTERING_SRC}")
+ConfigureTest(POLYGON_DISTANCE_TEST
+    distance/polygon_distance_test.cpp)
 
-set(QUADTREE_POLYLINE_FILTERING_SRC
-    "${CMAKE_CURRENT_SOURCE_DIR}/join/quadtree_polyline_filtering_test.cu")
-ConfigureTest(QUADTREE_POLYLINE_FILTERING_TEST "${QUADTREE_POLYLINE_FILTERING_SRC}")
+# equality
+ConfigureTest(PAIRWISE_MULTIPOINT_EQUALS_COUNT_TEST
+    equality/pairwise_multipoint_equals_count_test.cpp)
 
-set(TRAJECTORY_DISTANCES_AND_SPEEDS_TEST_SRC
-"${CMAKE_CURRENT_SOURCE_DIR}/trajectory/test_trajectory_distances_and_speeds.cu")
-ConfigureTest(TRAJECTORY_DISTANCES_AND_SPEEDS_TEST "${TRAJECTORY_DISTANCES_AND_SPEEDS_TEST_SRC}")
+# intersection
+ConfigureTest(LINESTRING_INTERSECTION_TEST
+    intersection/linestring_intersection_test.cpp)
 
-set(DERIVE_TRAJECTORIES_TEST_SRC
-"${CMAKE_CURRENT_SOURCE_DIR}/trajectory/test_derive_trajectories.cu")
-ConfigureTest(DERIVE_TRAJECTORIES_TEST "${DERIVE_TRAJECTORIES_TEST_SRC}")
+# nearest points
+ConfigureTest(POINT_LINESTRING_NEAREST_POINT_TEST
+    nearest_points/point_linestring_nearest_points_test.cpp)
 
-set(TRAJECTORY_BOUNDING_BOXES_TEST_SRC
-"${CMAKE_CURRENT_SOURCE_DIR}/trajectory/test_trajectory_bounding_boxes.cu")
-ConfigureTest(TRAJECTORY_BOUNDING_BOXES_TEST "${TRAJECTORY_BOUNDING_BOXES_TEST_SRC}")
+# point in polygon
+ConfigureTest(POINT_IN_POLYGON_TEST
+    point_in_polygon/point_in_polygon_test.cpp)
 
-set(SPATIAL_WINDOW_POINT_TEST_SRC
-    "${CMAKE_CURRENT_SOURCE_DIR}/spatial_window/spatial_window_test.cpp")
-ConfigureTest(SPATIAL_WINDOW_POINT_TEST "${SPATIAL_WINDOW_POINT_TEST_SRC}")
+ConfigureTest(PAIRWISE_POINT_IN_POLYGON_TEST
+    point_in_polygon/pairwise_point_in_polygon_test.cpp)
+
+# points in range
+ConfigureTest(POINTS_IN_RANGE_TEST
+    points_in_range/points_in_range_test.cpp)
+
+# trajectory
+ConfigureTest(TRAJECTORY_DISTANCES_AND_SPEEDS_TEST
+    trajectory/test_trajectory_distances_and_speeds.cu)
+
+ConfigureTest(DERIVE_TRAJECTORIES_TEST
+    trajectory/test_derive_trajectories.cpp)
+
+ConfigureTest(TRAJECTORY_BOUNDING_BOXES_TEST
+    trajectory/test_trajectory_bounding_boxes.cu)
+
+# utility
+ConfigureTest(UTILITY_TEST
+    utility_test/test_float_equivalent.cu
+    utility_test/test_multipoint_factory.cu
+    utility_test/test_geometry_generators.cu
+)
+
+# find / intersection util
+ConfigureTest(FIND_TEST_EXP
+    find/find_and_combine_segments_test.cu
+    find/find_points_on_segments_test.cu
+    find/find_duplicate_points_test.cu)
+
+# index
+ConfigureTest(POINT_QUADTREE_TEST_EXP
+    index/point_quadtree_test.cu)
+
+# join
+ConfigureTest(JOIN_QUADTREE_AND_BOUNDING_BOXES_TEST_EXP
+    join/join_quadtree_and_bounding_boxes_test.cu)
+
+ConfigureTest(JOIN_POINT_IN_POLYGON_SMALL_TEST_EXP
+    join/quadtree_point_in_polygon_test_small.cu)
+
+ConfigureTest(JOIN_POINT_IN_POLYGON_LARGE_TEST_EXP
+    join/quadtree_point_in_polygon_test_large.cu)
+
+ConfigureTest(JOIN_POINT_TO_LINESTRING_SMALL_TEST_EXP
+    join/quadtree_point_to_nearest_linestring_test_small.cu)
+
+# operators
+ConfigureTest(OPERATOR_TEST_EXP
+    operators/linestrings_test.cu)
+
+# projection
+ConfigureTest(SINUSOIDAL_PROJECTION_TEST_EXP
+    projection/sinusoidal_projection_test.cu)
+
+# range
+ConfigureTest(RANGE_TEST_EXP
+    range/multilinestring_range_test.cu
+    range/multipolygon_range_test.cu)
+
+# bounding boxes
+ConfigureTest(POINT_BOUNDING_BOXES_TEST_EXP
+    bounding_boxes/point_bounding_boxes_test.cu)
+
+ConfigureTest(POLYGON_BOUNDING_BOXES_TEST_EXP
+    bounding_boxes/polygon_bounding_boxes_test.cu)
+
+ConfigureTest(LINESTRING_BOUNDING_BOXES_TEST_EXP
+    bounding_boxes/linestring_bounding_boxes_test.cu)
+
+# distance
+ConfigureTest(HAUSDORFF_TEST_EXP
+    distance/hausdorff_test.cu)
+
+ConfigureTest(HAVERSINE_TEST_EXP
+    distance/haversine_test.cu)
+
+ConfigureTest(POINT_DISTANCE_TEST_EXP
+    distance/point_distance_test.cu)
+
+ConfigureTest(POINT_LINESTRING_DISTANCE_TEST_EXP
+    distance/point_linestring_distance_test.cu)
+
+ConfigureTest(POINT_POLYGON_DISTANCE_TEST_EXP
+    distance/point_polygon_distance_test.cu)
+
+ConfigureTest(LINESTRING_POLYGON_DISTANCE_TEST_EXP
+    distance/linestring_polygon_distance_test.cu)
+
+ConfigureTest(LINESTRING_DISTANCE_TEST_EXP
+    distance/linestring_distance_test.cu
+    distance/linestring_distance_test_medium.cu)
+
+ConfigureTest(POLYGON_DISTANCE_TEST_EXP
+    distance/polygon_distance_test.cu)
+
+# equality
+ConfigureTest(PAIRWISE_MULTIPOINT_EQUALS_COUNT_TEST_EXP
+    equality/pairwise_multipoint_equals_count_test.cu)
+
+# intersection
+ConfigureTest(LINESTRING_INTERSECTION_TEST_EXP
+    intersection/linestring_intersection_count_test.cu
+    intersection/linestring_intersection_intermediates_remove_if_test.cu
+    intersection/linestring_intersection_with_duplicates_test.cu
+    intersection/linestring_intersection_test.cu
+    intersection/linestring_intersection_large_test.cu)
+
+# nearest points
+ConfigureTest(POINT_LINESTRING_NEAREST_POINT_TEST_EXP
+    nearest_points/point_linestring_nearest_points_test.cu)
+
+# point in polygon
+ConfigureTest(POINT_IN_POLYGON_TEST_EXP
+    point_in_polygon/point_in_polygon_test.cu)
+
+ConfigureTest(PAIRWISE_POINT_IN_POLYGON_TEST_EXP
+    point_in_polygon/pairwise_point_in_polygon_test.cu)
+
+# points in range
+ConfigureTest(POINTS_IN_RANGE_TEST_EXP
+    points_in_range/points_in_range_test.cu)
+
+# trajectory
+ConfigureTest(DERIVE_TRAJECTORIES_TEST_EXP
+    trajectory/derive_trajectories_test.cu)
+
+ConfigureTest(TRAJECTORY_DISTANCES_AND_SPEEDS_TEST_EXP
+    trajectory/trajectory_distances_and_speeds_test.cu)

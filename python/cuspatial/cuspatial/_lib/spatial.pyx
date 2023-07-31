@@ -1,38 +1,19 @@
 # Copyright (c) 2019, NVIDIA CORPORATION.
 
-
-from libc.stdlib cimport malloc, free
 from libcpp.memory cimport unique_ptr
 from libcpp.pair cimport pair
-from cudf import Series
+from libcpp.utility cimport move
+
 from cudf._lib.column cimport Column
 from cudf._lib.cpp.column.column cimport column
 from cudf._lib.cpp.column.column_view cimport column_view
-from cuspatial._lib.cpp.coordinate_transform cimport (
-    lonlat_to_cartesian as cpp_lonlat_to_cartesian
+
+from cuspatial._lib.cpp.projection cimport (
+    sinusoidal_projection as cpp_sinusoidal_projection,
 )
 
-from cuspatial._lib.cpp.spatial cimport (
-    haversine_distance as cpp_haversine_distance
-)
 
-from cuspatial._lib.move cimport move
-
-cpdef haversine_distance(Column x1, Column y1, Column x2, Column y2):
-    cdef column_view c_x1 = x1.view()
-    cdef column_view c_y1 = y1.view()
-    cdef column_view c_x2 = x2.view()
-    cdef column_view c_y2 = y2.view()
-
-    cdef unique_ptr[column] c_result
-
-    with nogil:
-        c_result = move(cpp_haversine_distance(c_x1, c_y1, c_x2, c_y2))
-
-    return Column.from_unique_ptr(move(c_result))
-
-
-def lonlat_to_cartesian(
+def sinusoidal_projection(
     double origin_lon,
     double origin_lat,
     Column input_lon,
@@ -45,7 +26,7 @@ def lonlat_to_cartesian(
 
     with nogil:
         result = move(
-            cpp_lonlat_to_cartesian(
+            cpp_sinusoidal_projection(
                 origin_lon,
                 origin_lat,
                 c_input_lon,

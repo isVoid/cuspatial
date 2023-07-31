@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, NVIDIA CORPORATION.
+ * Copyright (c) 2020-2022, NVIDIA CORPORATION.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,38 +14,41 @@
  * limitations under the License.
  */
 
-#include <thrust/iterator/discard_iterator.h>
+#include <cuspatial/bounding_boxes.cuh>
+#include <cuspatial/error.hpp>
+#include <cuspatial/iterator_factory.cuh>
 
 #include <cudf/column/column_device_view.cuh>
 #include <cudf/column/column_factories.hpp>
 #include <cudf/column/column_view.hpp>
 #include <cudf/copying.hpp>
-#include <cudf/detail/utilities/cuda.cuh>
 #include <cudf/table/table.hpp>
 #include <cudf/utilities/traits.hpp>
 #include <cudf/utilities/type_dispatcher.hpp>
 
-#include <cuspatial/error.hpp>
-#include <cuspatial/trajectory.hpp>
+#include <rmm/cuda_stream_view.hpp>
+
+#include <thrust/iterator/zip_iterator.h>
+
+#include <type_traits>
+#include <vector>
 
 namespace cuspatial {
 
 namespace {
 
 struct dispatch_element {
-  template <typename Element>
-  std::enable_if_t<std::is_floating_point<Element>::value, std::unique_ptr<cudf::table>> operator()(
+  template <typename T>
+  std::enable_if_t<std::is_floating_point<T>::value, std::unique_ptr<cudf::table>> operator()(
     cudf::size_type num_trajectories,
     cudf::column_view const& object_id,
     cudf::column_view const& x,
     cudf::column_view const& y,
-    rmm::mr::device_memory_resource* mr,
-    cudaStream_t stream)
+    rmm::cuda_stream_view stream,
+    rmm::mr::device_memory_resource* mr)
   {
-    auto policy = rmm::exec_policy(stream);
-
     // Construct output columns
-    auto type = cudf::data_type{cudf::type_to_id<Element>()};
+    auto type = cudf::data_type{cudf::type_to_id<T>()};
     std::vector<std::unique_ptr<cudf::column>> cols{};
     cols.reserve(4);
     // allocate bbox_x1 output column
@@ -61,54 +64,30 @@ struct dispatch_element {
     cols.push_back(
       cudf::make_numeric_column(type, num_trajectories, cudf::mask_state::UNALLOCATED, stream, mr));
 
-    auto points = thrust::make_zip_iterator(thrust::make_tuple(
-      x.begin<Element>(), y.begin<Element>(), x.begin<Element>(), y.begin<Element>()));
+    auto points_begin = cuspatial::make_vec_2d_iterator(x.begin<T>(), y.begin<T>());
 
-    auto bboxes = thrust::make_zip_iterator(
-      thrust::make_tuple(cols.at(0)->mutable_view().begin<Element>(),  // bbox_x1
-                         cols.at(1)->mutable_view().begin<Element>(),  // bbox_y1
-                         cols.at(2)->mutable_view().begin<Element>(),  // bbox_x2
-                         cols.at(3)->mutable_view().begin<Element>())  // bbox_y2
-    );
+    auto bounding_boxes_begin =
+      cuspatial::make_box_output_iterator(cols.at(0)->mutable_view().begin<T>(),
+                                          cols.at(1)->mutable_view().begin<T>(),
+                                          cols.at(2)->mutable_view().begin<T>(),
+                                          cols.at(3)->mutable_view().begin<T>());
 
-    thrust::fill(policy->on(stream),
-                 bboxes,
-                 bboxes + num_trajectories,
-                 thrust::make_tuple(std::numeric_limits<Element>::max(),
-                                    std::numeric_limits<Element>::max(),
-                                    std::numeric_limits<Element>::min(),
-                                    std::numeric_limits<Element>::min()));
-
-    thrust::reduce_by_key(
-      policy->on(stream),               // execution policy
-      object_id.begin<int32_t>(),       // keys_first
-      object_id.end<int32_t>(),         // keys_last
-      points,                           // values_first
-      thrust::make_discard_iterator(),  // keys_output
-      bboxes,                           // values_output
-      thrust::equal_to<int32_t>(),      // binary_pred
-      [] __device__(auto a, auto b) {   // binary_op
-        Element x1, y1, x2, y2, x3, y3, x4, y4;
-        thrust::tie(x1, y1, x2, y2) = a;
-        thrust::tie(x3, y3, x4, y4) = b;
-        return thrust::make_tuple(
-          min(min(x1, x2), x3), min(min(y1, y2), y3), max(max(x1, x2), x4), max(max(y1, y2), y4));
-      });
+    point_bounding_boxes(object_id.begin<cudf::size_type>(),
+                         object_id.end<cudf::size_type>(),
+                         points_begin,
+                         bounding_boxes_begin,
+                         T{0},
+                         stream);
 
     // check for errors
-    CHECK_CUDA(stream);
+    CUSPATIAL_CHECK_CUDA(stream.value());
 
     return std::make_unique<cudf::table>(std::move(cols));
   }
 
-  template <typename Element>
+  template <typename Element, typename... Args>
   std::enable_if_t<not std::is_floating_point<Element>::value, std::unique_ptr<cudf::table>>
-  operator()(cudf::size_type num_trajectories,
-             cudf::column_view const& object_id,
-             cudf::column_view const& x,
-             cudf::column_view const& y,
-             rmm::mr::device_memory_resource* mr,
-             cudaStream_t stream)
+  operator()(Args&&...)
   {
     CUSPATIAL_FAIL("X and Y must be floating point types");
   }
@@ -121,11 +100,11 @@ std::unique_ptr<cudf::table> trajectory_bounding_boxes(cudf::size_type num_traje
                                                        cudf::column_view const& object_id,
                                                        cudf::column_view const& x,
                                                        cudf::column_view const& y,
-                                                       rmm::mr::device_memory_resource* mr,
-                                                       cudaStream_t stream)
+                                                       rmm::cuda_stream_view stream,
+                                                       rmm::mr::device_memory_resource* mr)
 {
   return cudf::type_dispatcher(
-    x.type(), dispatch_element{}, num_trajectories, object_id, x, y, mr, stream);
+    x.type(), dispatch_element{}, num_trajectories, object_id, x, y, stream, mr);
 }
 }  // namespace detail
 
@@ -137,7 +116,8 @@ std::unique_ptr<cudf::table> trajectory_bounding_boxes(cudf::size_type num_traje
 {
   CUSPATIAL_EXPECTS(object_id.size() == x.size() && x.size() == y.size(), "Data size mismatch");
   CUSPATIAL_EXPECTS(x.type().id() == y.type().id(), "Data type mismatch");
-  CUSPATIAL_EXPECTS(object_id.type().id() == cudf::type_id::INT32, "Invalid object_id type");
+  CUSPATIAL_EXPECTS(object_id.type().id() == cudf::type_to_id<cudf::size_type>(),
+                    "Invalid object_id type");
   CUSPATIAL_EXPECTS(!(x.has_nulls() || y.has_nulls() || object_id.has_nulls()),
                     "NULL support unimplemented");
 
@@ -151,7 +131,8 @@ std::unique_ptr<cudf::table> trajectory_bounding_boxes(cudf::size_type num_traje
     return std::make_unique<cudf::table>(std::move(cols));
   }
 
-  return detail::trajectory_bounding_boxes(num_trajectories, object_id, x, y, mr, 0);
+  return detail::trajectory_bounding_boxes(
+    num_trajectories, object_id, x, y, rmm::cuda_stream_default, mr);
 }
 
 }  // namespace cuspatial
